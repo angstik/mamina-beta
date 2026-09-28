@@ -2,7 +2,7 @@ import './styles.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.30-beta.3'
+const APP_VERSION='1.1.30-beta.4'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -1082,6 +1082,7 @@ function destroyPageFlip(){
   try{s.flip?.destroy?.()}catch{}
   try{s.host?.remove()}catch{}
   try{s.visual?.classList.remove('pageflip-active')}catch{}
+  try{s.page?.classList.remove('pageflip-active-page')}catch{}
 }
 
 function ensurePageFlipModule(){
@@ -1193,7 +1194,9 @@ async function preparePageFlipForCurrent(){
       usePortrait:true,
       hardCovers:false,
       allowTouchScroll:false,
-      swipeDistance:22,
+      // Disable the engine's velocity/time based "quick swipe" shortcut.
+      // MamiNa commits by position instead (2/3 of the visible article).
+      swipeDistance:Math.max(1000,Math.round(rect.width*3)),
       respectInteractiveContent:true,
       pointerInput:['touch','pen','mouse'],
       foldCornerOnHover:false,
@@ -1212,9 +1215,39 @@ async function preparePageFlipForCurrent(){
     debug(e);host.remove();pageTurnMode='slide';return false
   }
 
-  const session={flip,host,visual:currentVisual,sheet:currentSheet,indices,startPage,current,changed:false,flipping:false}
+  const currentPage=currentVisual.closest('.article-page')
+  const session={flip,host,visual:currentVisual,page:currentPage,sheet:currentSheet,indices,startPage,current,changed:false,flipping:false,pointer:null}
   pageFlipSession=session
   currentVisual.classList.add('pageflip-active')
+  currentPage?.classList.add('pageflip-active-page')
+
+  // MamiNa owns only the commit threshold. The fork still owns all curl geometry.
+  // Capture runs before the engine's pointerup: below 2/3 we cancel the live fold;
+  // beyond 2/3 we let the engine finish it normally.
+  host.addEventListener('pointerdown',e=>{
+    if(pageFlipSession!==session||session.pointer)return
+    if(e.pointerType==='mouse'&&e.button!==0)return
+    const r=host.getBoundingClientRect()
+    session.pointer={id:e.pointerId,startX:e.clientX,left:r.left,width:Math.max(1,r.width)}
+  },{capture:true})
+  host.addEventListener('pointerup',e=>{
+    const p=session.pointer
+    if(pageFlipSession!==session||!p||p.id!==e.pointerId)return
+    session.pointer=null
+    const dx=e.clientX-p.startX
+    if(Math.abs(dx)<8)return
+    const x=(e.clientX-p.left)/p.width
+    const crossed=dx<0?x<=1/3:x>=2/3
+    if(!crossed&&flip.getState?.()!=='read'){
+      e.preventDefault()
+      e.stopPropagation()
+      try{flip.cancelTurn?.()}catch(err){debug(err)}
+      pageTurnAnimating=false
+      const list=$('articleDeck').querySelector(`[data-index="${session.current}"] .reaction-list`)
+      list?.classList.remove('pageflip-comments-out')
+    }
+  },{capture:true})
+  host.addEventListener('pointercancel',()=>{session.pointer=null},{capture:true})
 
   flip.on('changeState',e=>{
     if(pageFlipSession!==session)return
@@ -1239,10 +1272,17 @@ async function preparePageFlipForCurrent(){
     session.changed=true
     pageTurnAnimating=true
     const d=$('articleDeck')
-    d.scrollTo({left:target*d.clientWidth,behavior:'auto'})
+    // The curl is the ONLY transition. Temporarily disable the deck's smooth
+    // scroll/snap while its logical article index catches up with PageFlip.
+    d.classList.add('pageflip-sync')
+    d.scrollLeft=target*d.clientWidth
     activate(target,{soundMode:'gesture'})
     requestAnimationFrame(()=>commentsReveal(target))
-    setTimeout(()=>schedulePageFlipPrepare(),80)
+    setTimeout(()=>{
+      d.scrollLeft=target*d.clientWidth
+      d.classList.remove('pageflip-sync')
+      schedulePageFlipPrepare()
+    },180)
   })
   flip.on?.('turnRejected',()=>{
     if(pageFlipSession!==session)return

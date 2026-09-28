@@ -3,7 +3,7 @@
   position:absolute;
   inset:0;
   z-index:3;
-  overflow:hidden;
+  overflow:visible;
   background:var(--bg);
   touch-action:none;
 }
@@ -37,7 +37,7 @@
 }
 .pageflip-comments-out{
   opacity:0;
-  transition:opacity 150ms ease;
+  transition:opacity 1s ease;
 }
 .pageflip-comments-enter-asc .reaction,
 .pageflip-comments-enter-asc .empty,
@@ -70,3 +70,17 @@
 .mamina-pageflip-leaf,
 .mamina-pageflip-leaf-inner{direction:ltr}
 
+
+/* beta.4: PageFlip is the only visible horizontal transition. */
+.article-deck.pageflip-sync{
+  scroll-behavior:auto!important;
+  scroll-snap-type:none!important;
+}
+.article-visual.pageflip-active{
+  overflow:visible;
+  z-index:3;
+}
+.article-page.pageflip-active-page .reaction-list{
+  position:relative;
+  z-index:1;
+}

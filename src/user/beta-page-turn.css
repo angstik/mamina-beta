@@ -11,19 +11,25 @@
 .mamina-pageflip-leaf-inner{
   width:100%;
   height:100%;
-  display:flex;
-  align-items:center;
-  justify-content:center;
+  display:block;
   overflow:hidden;
   background:var(--bg);
 }
-.mamina-pageflip-leaf-inner img{
+.mamina-pageflip-leaf-inner .article-turn-sheet{
+  position:relative;
+  inset:auto;
+  width:100%;
+  height:100%;
+}
+.mamina-pageflip-leaf-inner .article-sheet-image{
   display:block;
   width:100%;
   height:100%;
   object-fit:contain;
+  object-position:center center;
   user-select:none;
   pointer-events:none;
+  transform:none!important;
 }
 .article-visual>.article-actions,
 .article-visual>.article-source-badge,
@@ -62,12 +68,8 @@
 
 /* beta.1: the curl owns the complete article surface; the original render must
    not remain underneath it while a leaf is being peeled. */
-.article-visual.pageflip-active>img{visibility:hidden}
-.article-visual.pageflip-active>.subtle{visibility:hidden}
+.article-visual.pageflip-active>.article-turn-sheet{visibility:hidden}
 .mamina-pageflip-host{direction:ltr}
 .mamina-pageflip-leaf,
 .mamina-pageflip-leaf-inner{direction:ltr}
-.mamina-pageflip-leaf-inner img{
-  transform:none!important;
-  object-position:center center;
-}
+

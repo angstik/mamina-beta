@@ -2,7 +2,7 @@ import './styles.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.30-beta.1'
+const APP_VERSION='1.1.30-beta.2'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -958,7 +958,7 @@ async function renderReader(){
   displayArticles.forEach((a,i)=>{
     const p=document.createElement('section');p.className='article-page';p.dataset.index=i
     const v=document.createElement('div');v.className='article-visual'
-    v.innerHTML=`<div class="subtle">Chargement…</div><span class="article-source-badge" hidden></span><div class="article-actions"><button class="article-float add-sound" title="Son">🎶</button><button class="article-float add-motion" title="Réaction animée">♥</button><button class="article-float add-message" title="Ajouter">＋</button></div><svg class="motion-draw-layer" hidden aria-hidden="true"><path class="motion-draw-path"></path></svg><div class="motion-play-layer" aria-hidden="true"></div>`
+    v.innerHTML=`<div class="article-turn-sheet"><div class="subtle">Chargement…</div><svg class="motion-draw-layer" hidden aria-hidden="true"><path class="motion-draw-path"></path></svg><div class="motion-play-layer" aria-hidden="true"></div></div><span class="article-source-badge" hidden></span><div class="article-actions"><button class="article-float add-sound" title="Son">🎶</button><button class="article-float add-motion" title="Réaction animée">♥</button><button class="article-float add-message" title="Ajouter">＋</button></div>`
     p.appendChild(v)
     const list=document.createElement('div');list.className='reaction-list';renderComments(a,list);p.appendChild(list);installReactionSwipe(list)
     d.appendChild(p)
@@ -1006,18 +1006,21 @@ function fitArticleVisual(v,img){
   if(Number.isFinite(desired)&&desired>180)v.style.flexBasis=`${Math.round(desired)}px`
 }
 async function loadVisual(i){
-  const p=$('articleDeck').querySelector(`[data-index="${i}"]`),v=p?.querySelector('.article-visual')
-  if(!v||v.querySelector('img'))return
+  const p=$('articleDeck').querySelector(`[data-index="${i}"]`),v=p?.querySelector('.article-visual'),sheet=v?.querySelector('.article-turn-sheet')
+  if(!v||!sheet||sheet.querySelector(':scope > img'))return
   try{
     const result=await service.getArticleImageInfo(displayArticles[i].articleKey)
     const img=document.createElement('img')
+    img.className='article-sheet-image'
     img.src=objectUrl(result.blob,readerUrls)
+    img.alt=''
+    img.draggable=false
     img.onload=()=>{
       fitArticleVisual(v,img)
       v._pz?.apply()
       if(i===currentArticleIndex){const deck=$('articleDeck');deck.scrollLeft=i*deck.clientWidth}
     }
-    v.querySelector('.subtle')?.remove()
+    sheet.querySelector('.subtle')?.remove()
     const badge=v.querySelector('.article-source-badge')
     if(badge){
       clearTimeout(badge._hideTimer)
@@ -1025,7 +1028,7 @@ async function loadVisual(i){
       badge.hidden=false
       badge._hideTimer=setTimeout(()=>{badge.hidden=true},1800)
     }
-    v.prepend(img);v._pz?.apply()
+    sheet.prepend(img);v._pz?.apply()
   }catch(e){debug(e)}
 }
 let articleLayoutResizeTimer=null
@@ -1098,7 +1101,7 @@ function waitArticleImage(index,timeout=3500){
   return new Promise(async resolve=>{
     if(index<0||index>=displayArticles.length)return resolve(null)
     await loadVisual(index)
-    const v=$('articleDeck').querySelector(`[data-index="${index}"] .article-visual`),img=v?.querySelector('img')
+    const v=$('articleDeck').querySelector(`[data-index="${index}"] .article-visual`),img=v?.querySelector('.article-turn-sheet > img')
     if(img?.complete&&img.naturalWidth)return resolve(img)
     if(!img)return resolve(null)
     let done=false
@@ -1143,12 +1146,17 @@ async function preparePageFlipForCurrent(){
   const current=currentArticleIndex
   const indices=[current-1,current,current+1].filter(i=>i>=0&&i<displayArticles.length)
   if(indices.length<2)return false
-  const images=await Promise.all(indices.map(waitArticleImage))
-  if(generation!==pageFlipGeneration||images.some(x=>!x))return false
+  await Promise.all(indices.map(waitArticleImage))
+  if(generation!==pageFlipGeneration)return false
+
   const currentVisual=$('articleDeck').querySelector(`[data-index="${current}"] .article-visual`)
-  if(!currentVisual)return false
-  const rect=currentVisual.getBoundingClientRect()
+  const currentSheet=currentVisual?.querySelector('.article-turn-sheet')
+  if(!currentVisual||!currentSheet)return false
+  const rect=currentSheet.getBoundingClientRect()
   if(rect.width<40||rect.height<40)return false
+
+  const sourceSheets=indices.map(i=>$('articleDeck').querySelector(`[data-index="${i}"] .article-turn-sheet`))
+  if(sourceSheets.some(x=>!x?.querySelector(':scope > img')))return false
 
   const host=document.createElement('div')
   host.className='mamina-pageflip-host'
@@ -1157,17 +1165,16 @@ async function preparePageFlipForCurrent(){
   const PageFlip=mod.PageFlip
   if(!PageFlip){host.remove();pageTurnMode='slide';return false}
 
-  const leaves=images.map((sourceImg,slot)=>{
+  const leaves=sourceSheets.map((sourceSheet,slot)=>{
     const leaf=document.createElement('div')
     leaf.className='mamina-pageflip-leaf'
     leaf.dataset.slot=String(slot)
     const inner=document.createElement('div')
     inner.className='mamina-pageflip-leaf-inner'
-    const img=document.createElement('img')
-    img.src=sourceImg.src
-    img.alt=''
-    img.draggable=false
-    inner.appendChild(img)
+    const sheet=sourceSheet.cloneNode(true)
+    sheet.classList.add('article-turn-sheet-clone')
+    for(const node of sheet.querySelectorAll('[id]'))node.removeAttribute('id')
+    inner.appendChild(sheet)
     leaf.appendChild(inner)
     host.appendChild(leaf)
     return leaf
@@ -1200,18 +1207,12 @@ async function preparePageFlipForCurrent(){
     })
     flip.loadFromHTML(leaves)
     const orientation=flip.getOrientation?.()
-    if(orientation&&orientation!=='portrait'){
-      throw new Error(`PageFlip: orientation inattendue ${orientation}; MamiNa exige une feuille portrait.`)
-    }
-    const loadedIndex=flip.getCurrentPageIndex?.()
-    if(Number.isInteger(loadedIndex)&&loadedIndex!==startPage){
-      flip.turnToPage?.(startPage)
-    }
+    if(orientation&&orientation!=='portrait')throw new Error(`PageFlip: orientation inattendue ${orientation}`)
   }catch(e){
     debug(e);host.remove();pageTurnMode='slide';return false
   }
 
-  const session={flip,host,visual:currentVisual,indices,startPage,current,changed:false,flipping:false}
+  const session={flip,host,visual:currentVisual,sheet:currentSheet,indices,startPage,current,changed:false,flipping:false}
   pageFlipSession=session
   currentVisual.classList.add('pageflip-active')
   installPageFlipEdgeGesture(session)
@@ -1224,9 +1225,8 @@ async function preparePageFlipForCurrent(){
       pageTurnAnimating=true
       commentsFadeOut(session.current)
     }else if(state==='read'){
-      const changed=session.changed
       pageTurnAnimating=false
-      if(!changed){
+      if(!session.changed){
         const list=$('articleDeck').querySelector(`[data-index="${session.current}"] .reaction-list`)
         list?.classList.remove('pageflip-comments-out')
       }

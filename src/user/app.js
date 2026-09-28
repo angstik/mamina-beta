@@ -1176,28 +1176,32 @@ async function preparePageFlipForCurrent(){
     flip=new PageFlip(host,{
       width:Math.max(1,Math.round(rect.width)),
       height:Math.max(1,Math.round(rect.height)),
-      size:'stretch',
-      minWidth:Math.max(1,Math.round(rect.width)),
-      maxWidth:Math.max(1,Math.round(rect.width)),
-      minHeight:Math.max(1,Math.round(rect.height)),
-      maxHeight:Math.max(1,Math.round(rect.height)),
+      sizing:'fixed',
       autoSize:false,
       drawShadow:true,
       maxShadowOpacity:.38,
       flippingTime:680,
       usePortrait:true,
-      showCover:false,
-      mobileScrollSupport:false,
+      hardCovers:false,
+      allowTouchScroll:false,
       swipeDistance:22,
-      clickEventForward:false,
-      useMouseEvents:true,
-      showPageCorners:false,
-      disableFlipByClick:true,
-      startPage,
+      respectInteractiveContent:true,
+      pointerInput:['mouse','touch','pen'],
+      foldCornerOnHover:false,
+      flipOnClick:'never',
+      initialPage:startPage,
       pageBackground:'var(--bg,#fff)',
       respectReducedMotion:true
     })
     flip.loadFromHTML(leaves)
+    const orientation=flip.getOrientation?.()
+    if(orientation&&orientation!=='portrait'){
+      throw new Error(`PageFlip: orientation inattendue ${orientation}; MamiNa exige une feuille portrait.`)
+    }
+    const loadedIndex=flip.getCurrentPageIndex?.()
+    if(Number.isInteger(loadedIndex)&&loadedIndex!==startPage){
+      flip.turnToPage?.(startPage)
+    }
   }catch(e){
     debug(e);host.remove();pageTurnMode='slide';return false
   }

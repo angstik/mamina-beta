@@ -25,12 +25,6 @@
   user-select:none;
   pointer-events:none;
 }
-.mamina-pageflip-host canvas,
-.mamina-pageflip-host .stf__parent,
-.mamina-pageflip-host .stf__wrapper{
-  max-width:100%!important;
-  max-height:100%!important;
-}
 .article-visual>.article-actions,
 .article-visual>.article-source-badge,
 .article-visual>.motion-draw-layer,

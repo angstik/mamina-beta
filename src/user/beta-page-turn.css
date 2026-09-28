@@ -2,7 +2,7 @@
 .mamina-pageflip-host{
   position:absolute;
   inset:0;
-  z-index:2;
+  z-index:3;
   overflow:hidden;
   background:var(--bg);
   touch-action:none;
@@ -32,10 +32,8 @@
   transform:none!important;
 }
 .article-visual>.article-actions,
-.article-visual>.article-source-badge,
-.article-visual>.motion-draw-layer,
-.article-visual>.motion-play-layer{
-  z-index:4;
+.article-visual>.article-source-badge{
+  z-index:5;
 }
 .pageflip-comments-out{
   opacity:0;
@@ -68,7 +66,6 @@
 
 /* beta.1: the curl owns the complete article surface; the original render must
    not remain underneath it while a leaf is being peeled. */
-.article-visual.pageflip-active>.article-turn-sheet{visibility:hidden}
 .mamina-pageflip-host{direction:ltr}
 .mamina-pageflip-leaf,
 .mamina-pageflip-leaf-inner{direction:ltr}

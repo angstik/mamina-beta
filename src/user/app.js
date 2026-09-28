@@ -3,9 +3,9 @@ import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
 const APP_VERSION='1.1.30'
-const READER_STATE_KEY='MAMINA_READER_STATE'
-const HEARTBEAT_KEY='MAMINA_HEARTBEAT'
-const STORED_PASSWORD_KEY='MAMINA_STORED_PASSWORD'
+const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
+const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
+const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
 const $=id=>document.getElementById(id)
 const service=new UserMaminaService()
 
@@ -14,7 +14,7 @@ let reactionOrder='asc',articleOrderMode='magazine',appName='MamiNa'
 const IS_BETA_PAGE_TURN=Boolean(window.MAMINA_BETA_PAGE_TURN)
 let pageTurnMode=IS_BETA_PAGE_TURN?'page':'slide',pageTurnAnimating=false
 let composerArticleKey=null,safetyTimer=null,reconnectTimer=null,connectionClock=null,readTimer=null
-let telegramState='offline',reconnecting=false,lastConnectedAt=Number(localStorage.getItem('MAMINA_LAST_CONNECTED_AT')||0)
+let telegramState='offline',reconnecting=false,lastConnectedAt=Number(localStorage.getItem('MAMINA_BETA_LAST_CONNECTED_AT')||0)
 let currentColor='#000000',savedRange=null,lastArticleCopy={text:'',at:0}
 let typingState={bold:false,italic:false,underline:false,strikeThrough:false,color:null}
 let activityTimer=null
@@ -24,18 +24,18 @@ const playedMotionVisits=new Set()
 let motionVisitToken=0,motionPlaybackTimer=null,motionDraft=null,motionPrevZoom=null,motionDraw=null
 const activeMotionArticles=new Set()
 const DEFAULT_MOTION_EMOJI=['❤️','😂','👍','😍','😢','🎉','😘','🥰','👏','🙏','🔥','✨']
-const EMOJI_RECENT_KEY='MAMINA_EMOJI_RECENT'
-const EMOJI_USAGE_KEY='MAMINA_EMOJI_USAGE'
+const EMOJI_RECENT_KEY='MAMINA_BETA_EMOJI_RECENT'
+const EMOJI_USAGE_KEY='MAMINA_BETA_EMOJI_USAGE'
 const motionAuthorUrls=[]
 const avatarChoiceUrls=[]
 const focusZoomStates=new Map()
 let focusArticleKey=null,focusPhotoUrl=null
-const SOUND_ENABLED_KEY='MAMINA_SOUND_ENABLED'
+const SOUND_ENABLED_KEY='MAMINA_BETA_SOUND_ENABLED'
 const SOUND_CACHE_NAME='mamina-sounds-v1'
-const SOUND_CACHE_META_KEY='MAMINA_SOUND_CACHE_META'
+const SOUND_CACHE_META_KEY='MAMINA_BETA_SOUND_CACHE_META'
 const SOUND_CACHE_TTL=7*24*60*60*1000
-const FREESOUND_API_KEY_LOCAL='MAMINA_FREESOUND_API_KEY'
-const SOUND_ADMIN_DRAFT_PREFIX='MAMINA_SOUND_ADMIN_DRAFT'
+const FREESOUND_API_KEY_LOCAL='MAMINA_BETA_FREESOUND_API_KEY'
+const SOUND_ADMIN_DRAFT_PREFIX='MAMINA_BETA_SOUND_ADMIN_DRAFT'
 let soundCatalog=[],freesoundApiKey='',soundDraft=null
 let adminSoundDrafts=[],adminSoundWizard=null,adminSoundPreviewSource=null,adminSoundPreviewButton=null,adminSoundGroupId=''
 let soundGlobalEnabled=localStorage.getItem(SOUND_ENABLED_KEY)!=='0'
@@ -129,7 +129,7 @@ function refreshPills(){
 }
 function setConnectionUi(s){
   telegramState=s||'offline'
-  if(s==='connected'){lastConnectedAt=Date.now();localStorage.setItem('MAMINA_LAST_CONNECTED_AT',String(lastConnectedAt))}
+  if(s==='connected'){lastConnectedAt=Date.now();localStorage.setItem('MAMINA_BETA_LAST_CONNECTED_AT',String(lastConnectedAt))}
   $('telegramState').textContent=s||'—'
   refreshPills()
 }
@@ -164,7 +164,7 @@ function showOfflineLocalState(){
   status('setupStatus','Hors ligne — aucune revue locale disponible. Reconnecte le réseau pour initialiser MamiNa.')
 }
 function isMaminaPasswordError(error){
-  return error?.code==='MAMINA_PASSWORD_INVALID'||/mot de passe mamina incorrect/i.test(String(error?.message||''))
+  return error?.code==='MAMINA_BETA_PASSWORD_INVALID'||/mot de passe mamina incorrect/i.test(String(error?.message||''))
 }
 async function connectTelegramAfterUnlock(){
   if(!navigator.onLine){
@@ -2030,8 +2030,8 @@ function renderLogs(){$('techLogs').textContent=formatLogs()||'Aucun journal.'}
 onLog(renderLogs)
 $('clearLogs').onclick=()=>{clearTechLogs();renderLogs()}
 $('copyLogs').onclick=()=>navigator.clipboard.writeText(formatLogs())
-$('verboseLogs').checked=Number(localStorage.getItem('MTCUTE_LOG_LEVEL')||2)>=4
-$('verboseLogs').onchange=()=>localStorage.setItem('MTCUTE_LOG_LEVEL',$('verboseLogs').checked?'4':'2')
+$('verboseLogs').checked=Number(localStorage.getItem('MAMINA_BETA_MTCUTE_LOG_LEVEL')||2)>=4
+$('verboseLogs').onchange=()=>localStorage.setItem('MAMINA_BETA_MTCUTE_LOG_LEVEL',$('verboseLogs').checked?'4':'2')
 
 let adminGroups=[],adminTopics=[],lastAdminErrorText=''
 function rememberAdminError(e,context='Administration'){

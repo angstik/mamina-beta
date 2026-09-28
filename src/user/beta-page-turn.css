@@ -39,26 +39,6 @@
   opacity:0;
   transition:opacity 1s ease;
 }
-.pageflip-comments-enter-asc .reaction,
-.pageflip-comments-enter-asc .empty,
-.pageflip-comments-enter-desc .reaction,
-.pageflip-comments-enter-desc .empty{
-  opacity:0;
-  animation:mamina-comment-stack 360ms ease forwards;
-  animation-delay:calc(var(--comment-step,0) * 34ms);
-}
-@keyframes mamina-comment-stack{
-  from{opacity:0;transform:translateY(8px)}
-  to{opacity:1;transform:none}
-}
-.pageflip-comments-enter-desc .reaction,
-.pageflip-comments-enter-desc .empty{
-  animation-name:mamina-comment-stack-desc;
-}
-@keyframes mamina-comment-stack-desc{
-  from{opacity:0;transform:translateY(-8px)}
-  to{opacity:1;transform:none}
-}
 @media (prefers-reduced-motion:reduce){
   .mamina-pageflip-host{display:none!important}
   .pageflip-comments-out{opacity:1!important}
@@ -90,4 +70,30 @@
 .mamina-pageflip-host [data-stf-clone] .article-turn-sheet-clone{
   transform:scaleX(-1);
   transform-origin:center center;
+}
+
+/* beta.7: comments stack from the edge farthest from the newest message. */
+.pageflip-comments-stacking .reaction,
+.pageflip-comments-stacking .empty{
+  opacity:0;
+  transform:translateY(var(--comment-entry-y,0));
+  will-change:transform,opacity;
+}
+.pageflip-comments-stacking-run .reaction,
+.pageflip-comments-stacking-run .empty{
+  animation:mamina-comment-drop 560ms cubic-bezier(.22,.72,.22,1) forwards;
+  animation-delay:calc(var(--comment-step,0) * 72ms);
+}
+@keyframes mamina-comment-drop{
+  0%{opacity:0;transform:translateY(var(--comment-entry-y,0)) scale(.985)}
+  72%{opacity:1;transform:translateY(3px) scale(1)}
+  100%{opacity:1;transform:translateY(0) scale(1)}
+}
+@media (prefers-reduced-motion:reduce){
+  .pageflip-comments-stacking .reaction,
+  .pageflip-comments-stacking .empty{
+    opacity:1!important;
+    transform:none!important;
+    animation:none!important;
+  }
 }

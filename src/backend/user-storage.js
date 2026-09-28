@@ -1,4 +1,4 @@
-const DB = 'mamina-user-v0'
+const DB = 'mamina-beta-user-v0'
 const VERSION = 2
 
 function openDb() {

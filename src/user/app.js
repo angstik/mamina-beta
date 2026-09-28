@@ -2,7 +2,7 @@ import './styles.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.30-beta.4'
+const APP_VERSION='1.1.30-beta.5'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -1195,7 +1195,7 @@ async function preparePageFlipForCurrent(){
       hardCovers:false,
       allowTouchScroll:false,
       // Disable the engine's velocity/time based "quick swipe" shortcut.
-      // MamiNa commits by position instead (2/3 of the visible article).
+      // MamiNa commits by finger position at release; velocity is irrelevant.
       swipeDistance:Math.max(1000,Math.round(rect.width*3)),
       respectInteractiveContent:true,
       pointerInput:['touch','pen','mouse'],
@@ -1216,14 +1216,30 @@ async function preparePageFlipForCurrent(){
   }
 
   const currentPage=currentVisual.closest('.article-page')
-  const session={flip,host,visual:currentVisual,page:currentPage,sheet:currentSheet,indices,startPage,current,changed:false,flipping:false,pointer:null}
+  const symbolOn=(object,description)=>{
+    for(let proto=object;proto;proto=Object.getPrototypeOf(proto)){
+      const symbol=Object.getOwnPropertySymbols(proto).find(s=>s.description===description)
+      if(symbol)return symbol
+    }
+    return null
+  }
+  const getFlipSymbol=symbolOn(flip,'flipbook.getFlip')
+  const getUiSymbol=symbolOn(flip,'flipbook.getUI')
+  const controller=getFlipSymbol?flip[getFlipSymbol]():null
+  const flipUi=getUiSymbol?flip[getUiSymbol]():null
+  const dropPointerSymbol=flipUi?symbolOn(flipUi,'flipbook.dropPointerGesture'):null
+  const session={flip,host,visual:currentVisual,page:currentPage,sheet:currentSheet,indices,startPage,current,changed:false,flipping:false,pointer:null,controller,flipUi,dropPointerSymbol,settleTime:680}
   pageFlipSession=session
   currentVisual.classList.add('pageflip-active')
   currentPage?.classList.add('pageflip-active-page')
 
-  // MamiNa owns only the commit threshold. The fork still owns all curl geometry.
-  // Capture runs before the engine's pointerup: below 2/3 we cancel the live fold;
-  // beyond 2/3 we let the engine finish it normally.
+  // The finger position AT RELEASE decides the outcome. Once it enters the
+  // opposite half of the article, finish the existing curl from its current
+  // geometry; otherwise return along the same geometry. Velocity is irrelevant.
+  //
+  // The fork deliberately keeps these engine seams symbol-keyed. This beta uses
+  // reflection only to continue the live fold without restarting it from a
+  // corner; production can vendor the tiny release-threshold hook if retained.
   host.addEventListener('pointerdown',e=>{
     if(pageFlipSession!==session||session.pointer)return
     if(e.pointerType==='mouse'&&e.button!==0)return
@@ -1236,15 +1252,45 @@ async function preparePageFlipForCurrent(){
     session.pointer=null
     const dx=e.clientX-p.startX
     if(Math.abs(dx)<8)return
-    const x=(e.clientX-p.left)/p.width
-    const crossed=dx<0?x<=1/3:x>=2/3
-    if(!crossed&&flip.getState?.()!=='read'){
-      e.preventDefault()
-      e.stopPropagation()
-      try{flip.cancelTurn?.()}catch(err){debug(err)}
-      pageTurnAnimating=false
-      const list=$('articleDeck').querySelector(`[data-index="${session.current}"] .reaction-list`)
-      list?.classList.remove('pageflip-comments-out')
+
+    const releaseX=(e.clientX-p.left)/p.width
+    const crossedFarHalf=dx<0?releaseX<=.5:releaseX>=.5
+    const controller=session.controller
+    const calc=controller?.getCalculation?.()
+    const animate=controller?.animateFlippingTo
+
+    // If the installed engine shape ever changes, leave its native release path
+    // intact rather than breaking navigation.
+    if(!calc||typeof animate!=='function')return
+
+    e.preventDefault()
+    e.stopPropagation()
+
+    // Native pointerup no longer reaches the engine, so unwind both halves of
+    // its gesture bookkeeping before starting the settle animation.
+    try{
+      const block=flip.getBlockElement()
+      const br=block.getBoundingClientRect()
+      const sx=block.offsetWidth>0&&br.width>0?br.width/block.offsetWidth:1
+      const sy=block.offsetHeight>0&&br.height>0?br.height/block.offsetHeight:1
+      flip.userStop({x:(e.clientX-br.left)/sx,y:(e.clientY-br.top)/sy},true)
+      if(session.flipUi&&session.dropPointerSymbol)session.flipUi[session.dropPointerSymbol]()
+    }catch(err){debug(err)}
+
+    const bounds=flip.getBoundsRect()
+    const from=calc.getPosition()
+    const y=calc.getCorner()===mod.FlipCorner.BOTTOM?bounds.height:0
+
+    // Return is intentionally slower. animateFlippingTo scales duration by
+    // remaining distance, therefore this remains a constant-speed return rather
+    // than an ease/acceleration effect.
+    session.settleTime=crossedFarHalf?680:1000
+    try{flip.updateSettings({flippingTime:session.settleTime})}catch(err){debug(err)}
+    try{
+      animate.call(controller,from,{x:crossedFarHalf?-bounds.pageWidth:bounds.pageWidth,y},crossedFarHalf)
+    }catch(err){
+      debug(err)
+      try{flip.cancelTurn?.()}catch(cancelErr){debug(cancelErr)}
     }
   },{capture:true})
   host.addEventListener('pointercancel',()=>{session.pointer=null},{capture:true})
@@ -1257,6 +1303,10 @@ async function preparePageFlipForCurrent(){
       pageTurnAnimating=true
       commentsFadeOut(session.current)
     }else if(state==='read'){
+      if(session.settleTime!==680){
+        session.settleTime=680
+        try{flip.updateSettings({flippingTime:680})}catch(err){debug(err)}
+      }
       pageTurnAnimating=false
       if(!session.changed){
         const list=$('articleDeck').querySelector(`[data-index="${session.current}"] .reaction-list`)

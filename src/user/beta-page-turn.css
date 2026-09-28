@@ -59,3 +59,15 @@
   .mamina-pageflip-host{display:none!important}
   .pageflip-comments-out{opacity:1!important}
 }
+
+/* beta.1: the curl owns the complete article surface; the original render must
+   not remain underneath it while a leaf is being peeled. */
+.article-visual.pageflip-active>img{visibility:hidden}
+.article-visual.pageflip-active>.subtle{visibility:hidden}
+.mamina-pageflip-host{direction:ltr}
+.mamina-pageflip-leaf,
+.mamina-pageflip-leaf-inner{direction:ltr}
+.mamina-pageflip-leaf-inner img{
+  transform:none!important;
+  object-position:center center;
+}

@@ -2,7 +2,7 @@ import './styles.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.30'
+const APP_VERSION='1.1.30-beta.1'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -1075,8 +1075,10 @@ function destroyPageFlip(){
   pageFlipSession=null
   pageTurnAnimating=false
   if(!s)return
+  try{s.flip?.cancelTurn?.()}catch{}
   try{s.flip?.destroy?.()}catch{}
   try{s.host?.remove()}catch{}
+  try{s.visual?.classList.remove('pageflip-active')}catch{}
 }
 
 function ensurePageFlipModule(){
@@ -1186,9 +1188,12 @@ async function preparePageFlipForCurrent(){
       allowTouchScroll:false,
       swipeDistance:22,
       respectInteractiveContent:true,
-      pointerInput:['mouse','touch','pen'],
+      pointerInput:[],
       foldCornerOnHover:false,
       flipOnClick:'never',
+      useKeyboard:false,
+      controls:'none',
+      readingDirection:'ltr',
       initialPage:startPage,
       pageBackground:'var(--bg,#fff)',
       respectReducedMotion:true
@@ -1206,8 +1211,10 @@ async function preparePageFlipForCurrent(){
     debug(e);host.remove();pageTurnMode='slide';return false
   }
 
-  const session={flip,host,indices,startPage,current,changed:false,flipping:false}
+  const session={flip,host,visual:currentVisual,indices,startPage,current,changed:false,flipping:false}
   pageFlipSession=session
+  currentVisual.classList.add('pageflip-active')
+  installPageFlipEdgeGesture(session)
 
   flip.on('changeState',e=>{
     if(pageFlipSession!==session)return
@@ -1246,6 +1253,73 @@ async function preparePageFlipForCurrent(){
   })
   return true
 }
+function installPageFlipEdgeGesture(session){
+  const {host,flip,current}=session
+  let gesture=null
+  const point=e=>{
+    const r=host.getBoundingClientRect()
+    return {
+      rect:r,
+      x:Math.max(0,Math.min(r.width,e.clientX-r.left)),
+      y:Math.max(0,Math.min(r.height,e.clientY-r.top)),
+    }
+  }
+  const clear=()=>{
+    if(gesture?.started){
+      try{flip.cancelTurn?.()}catch{}
+    }
+    gesture=null
+    pageTurnAnimating=false
+    const list=$('articleDeck').querySelector(`[data-index="${current}"] .reaction-list`)
+    list?.classList.remove('pageflip-comments-out')
+  }
+  host.addEventListener('pointerdown',e=>{
+    if(gesture||!$('composerModal').hidden||!$('motionComposer').hidden||!$('soundComposer').hidden)return
+    if(e.pointerType==='mouse'&&e.button!==0)return
+    const p=point(e),edge=Math.min(64,Math.max(38,p.rect.width*.14))
+    const side=p.x<=edge?'left':p.x>=p.rect.width-edge?'right':null
+    if(!side)return
+    if(side==='left'&&current<=0)return
+    if(side==='right'&&current>=displayArticles.length-1)return
+    gesture={id:e.pointerId,side,startX:p.x,startY:p.y,lastX:p.x,started:false}
+  })
+  host.addEventListener('pointermove',e=>{
+    if(!gesture||gesture.id!==e.pointerId)return
+    const p=point(e),dx=p.x-gesture.startX,dy=p.y-gesture.startY
+    if(!gesture.started){
+      if(Math.abs(dx)<9&&Math.abs(dy)<9)return
+      if(Math.abs(dy)>Math.abs(dx)*.72){gesture=null;return}
+      const correct=gesture.side==='right'?dx<0:dx>0
+      if(!correct){if(Math.abs(dx)>14)gesture=null;return}
+      const start={x:gesture.side==='right'?Math.max(1,p.rect.width-1):1,y:gesture.startY}
+      try{
+        flip.startUserTouch(start)
+        gesture.started=true
+        host.setPointerCapture?.(e.pointerId)
+        commentsFadeOut(current)
+        pageTurnAnimating=true
+      }catch(err){debug(err);clear();return}
+    }
+    e.preventDefault()
+    gesture.lastX=p.x
+    try{
+      flip.userMove({x:p.x,y:gesture.startY},true)
+    }catch(err){debug(err);clear()}
+  },{passive:false})
+  const finish=e=>{
+    if(!gesture||gesture.id!==e.pointerId)return
+    const p=point(e),started=gesture.started,startY=gesture.startY
+    gesture=null
+    if(!started)return
+    e.preventDefault()
+    try{flip.userStop({x:p.x,y:startY},false)}
+    catch(err){debug(err);clear()}
+  }
+  host.addEventListener('pointerup',finish,{passive:false})
+  host.addEventListener('pointercancel',clear)
+  host.addEventListener('lostpointercapture',()=>{if(gesture?.started)clear()})
+}
+
 let pageFlipPrepareTimer=null
 function schedulePageFlipPrepare(delay=80){
   if(pageTurnMode!=='page')return
@@ -1282,7 +1356,7 @@ function installReactionSwipe(list){
     if(!start||!e.changedTouches?.length)return
     const t=e.changedTouches[0],dx=t.clientX-start.x,dy=t.clientY-start.y
     start=null
-    if(Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)*1.15)goArticle(dx<0?1:-1)
+    if(pageTurnMode!=='page'&&Math.abs(dx)>55&&Math.abs(dx)>Math.abs(dy)*1.15)goArticle(dx<0?1:-1)
   },{passive:true})
   list.addEventListener('touchcancel',()=>{start=null},{passive:true})
 }
@@ -1311,6 +1385,7 @@ function installArticleGestures(container,index){
   container._pz={get scale(){return st.scale},reset,apply,snapshot:()=>({...st}),setState}
 
   container.addEventListener('touchstart',e=>{
+    if(pageTurnMode==='page'&&e.target.closest?.('.mamina-pageflip-host'))return
     if(motionDraw?.v===container)return
     if(e.target.closest('button'))return
     if(raf)cancelAnimationFrame(raf)

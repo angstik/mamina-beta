@@ -84,3 +84,10 @@
   position:relative;
   z-index:1;
 }
+
+/* beta.6 experiment: mirror only the temporary moving copy to simulate
+   the printed verso of the sheet. Static leaves are never mirrored. */
+.mamina-pageflip-host [data-stf-clone] .article-turn-sheet-clone{
+  transform:scaleX(-1);
+  transform-origin:center center;
+}

@@ -2,7 +2,7 @@ import './styles.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.30-beta.5'
+const APP_VERSION='1.1.30-beta.6'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -1233,9 +1233,8 @@ async function preparePageFlipForCurrent(){
   currentVisual.classList.add('pageflip-active')
   currentPage?.classList.add('pageflip-active-page')
 
-  // The finger position AT RELEASE decides the outcome. Once it enters the
-  // opposite half of the article, finish the existing curl from its current
-  // geometry; otherwise return along the same geometry. Velocity is irrelevant.
+  // The finger position AT RELEASE decides the outcome. Only the farthest
+  // quarter commits the turn; otherwise the same curl returns. Velocity is irrelevant.
   //
   // The fork deliberately keeps these engine seams symbol-keyed. This beta uses
   // reflection only to continue the live fold without restarting it from a
@@ -1244,17 +1243,44 @@ async function preparePageFlipForCurrent(){
     if(pageFlipSession!==session||session.pointer)return
     if(e.pointerType==='mouse'&&e.button!==0)return
     const r=host.getBoundingClientRect()
-    session.pointer={id:e.pointerId,startX:e.clientX,left:r.left,width:Math.max(1,r.width)}
+    session.pointer={id:e.pointerId,startX:e.clientX,left:r.left,width:Math.max(1,r.width),blocked:false}
   },{capture:true})
+  host.addEventListener('pointermove',e=>{
+    const p=session.pointer
+    if(pageFlipSession!==session||!p||p.id!==e.pointerId||p.blocked)return
+    const dx=e.clientX-p.startX
+    if(Math.abs(dx)<10)return
+    const wantsPrev=dx>0
+    const impossible=(wantsPrev&&session.current<=0)||(!wantsPrev&&session.current>=displayArticles.length-1)
+    if(!impossible)return
+
+    // Do not let the engine reinterpret an impossible "previous" gesture as
+    // "next" (notably on the first article). Abort as soon as direction is clear.
+    p.blocked=true
+    e.preventDefault()
+    e.stopPropagation()
+    try{flip.cancelTurn?.()}catch(err){debug(err)}
+    pageTurnAnimating=false
+    const list=$('articleDeck').querySelector(`[data-index="${session.current}"] .reaction-list`)
+    list?.classList.remove('pageflip-comments-out')
+  },{capture:true,passive:false})
   host.addEventListener('pointerup',e=>{
     const p=session.pointer
     if(pageFlipSession!==session||!p||p.id!==e.pointerId)return
     session.pointer=null
+    if(p.blocked){
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     const dx=e.clientX-p.startX
     if(Math.abs(dx)<8)return
 
+    const wantsPrev=dx>0
+    const impossible=(wantsPrev&&session.current<=0)||(!wantsPrev&&session.current>=displayArticles.length-1)
     const releaseX=(e.clientX-p.left)/p.width
-    const crossedFarHalf=dx<0?releaseX<=.5:releaseX>=.5
+    // Commit only when the finger is released inside the farthest quarter.
+    const crossedFarQuarter=!impossible&&(dx<0?releaseX<=.25:releaseX>=.75)
     const controller=session.controller
     const calc=controller?.getCalculation?.()
     const animate=controller?.animateFlippingTo
@@ -1284,10 +1310,10 @@ async function preparePageFlipForCurrent(){
     // Return is intentionally slower. animateFlippingTo scales duration by
     // remaining distance, therefore this remains a constant-speed return rather
     // than an ease/acceleration effect.
-    session.settleTime=crossedFarHalf?680:1000
+    session.settleTime=crossedFarQuarter?680:1000
     try{flip.updateSettings({flippingTime:session.settleTime})}catch(err){debug(err)}
     try{
-      animate.call(controller,from,{x:crossedFarHalf?-bounds.pageWidth:bounds.pageWidth,y},crossedFarHalf)
+      animate.call(controller,from,{x:crossedFarQuarter?-bounds.pageWidth:bounds.pageWidth,y},crossedFarQuarter)
     }catch(err){
       debug(err)
       try{flip.cancelTurn?.()}catch(cancelErr){debug(cancelErr)}

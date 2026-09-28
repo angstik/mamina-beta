@@ -8,8 +8,8 @@ export class TelegramGateway {
     this.tg = new TelegramClient({
       apiId,
       apiHash,
-      storage: 'mamina-telegram-user',
-      logLevel: Number(localStorage.getItem('MTCUTE_LOG_LEVEL') || 2),
+      storage: 'mamina-beta-telegram-user',
+      logLevel: Number(localStorage.getItem('MAMINA_BETA_MTCUTE_LOG_LEVEL') || 2),
       updates: { catchUp: true, messageGroupingInterval: 250 },
     })
     this.self = null

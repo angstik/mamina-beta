@@ -1082,7 +1082,7 @@ function destroyPageFlip(){
 function ensurePageFlipModule(){
   if(pageTurnMode!=='page'||matchMedia('(prefers-reduced-motion: reduce)').matches)return Promise.resolve(null)
   if(!pageFlipModulePromise){
-    pageFlipModulePromise=import('page-flip').catch(e=>{
+    pageFlipModulePromise=import('@gullabs/flipbook-core').catch(e=>{
       debug(e)
       pageTurnMode='slide'
       destroyPageFlip()
@@ -1155,6 +1155,22 @@ async function preparePageFlipForCurrent(){
   const PageFlip=mod.PageFlip
   if(!PageFlip){host.remove();pageTurnMode='slide';return false}
 
+  const leaves=images.map((sourceImg,slot)=>{
+    const leaf=document.createElement('div')
+    leaf.className='mamina-pageflip-leaf'
+    leaf.dataset.slot=String(slot)
+    const inner=document.createElement('div')
+    inner.className='mamina-pageflip-leaf-inner'
+    const img=document.createElement('img')
+    img.src=sourceImg.src
+    img.alt=''
+    img.draggable=false
+    inner.appendChild(img)
+    leaf.appendChild(inner)
+    host.appendChild(leaf)
+    return leaf
+  })
+
   let flip
   try{
     flip=new PageFlip(host,{
@@ -1167,18 +1183,21 @@ async function preparePageFlipForCurrent(){
       maxHeight:Math.max(1,Math.round(rect.height)),
       autoSize:false,
       drawShadow:true,
-      maxShadowOpacity:.42,
-      flippingTime:620,
+      maxShadowOpacity:.38,
+      flippingTime:680,
       usePortrait:true,
       showCover:false,
       mobileScrollSupport:false,
-      swipeDistance:24,
+      swipeDistance:22,
       clickEventForward:false,
       useMouseEvents:true,
+      showPageCorners:false,
       disableFlipByClick:true,
-      startPage
+      startPage,
+      pageBackground:'var(--bg,#fff)',
+      respectReducedMotion:true
     })
-    flip.loadFromImages(images.map(img=>img.src))
+    flip.loadFromHTML(leaves)
   }catch(e){
     debug(e);host.remove();pageTurnMode='slide';return false
   }
@@ -1188,8 +1207,8 @@ async function preparePageFlipForCurrent(){
 
   flip.on('changeState',e=>{
     if(pageFlipSession!==session)return
-    const state=String(e.data||'')
-    if(state==='flipping'){
+    const state=String(e?.data?.state??e?.data??'')
+    if(state==='user_fold'||state==='fold_corner'||state==='flipping'){
       session.flipping=true
       pageTurnAnimating=true
       commentsFadeOut(session.current)
@@ -1204,7 +1223,7 @@ async function preparePageFlipForCurrent(){
   })
   flip.on('flip',e=>{
     if(pageFlipSession!==session)return
-    const slot=Number(e.data)
+    const slot=Number(e?.data?.page??e?.data)
     const target=session.indices[slot]
     if(!Number.isInteger(target)||target===currentArticleIndex)return
     session.changed=true
@@ -1215,9 +1234,14 @@ async function preparePageFlipForCurrent(){
     requestAnimationFrame(()=>commentsReveal(target))
     setTimeout(()=>schedulePageFlipPrepare(),80)
   })
+  flip.on?.('turnRejected',()=>{
+    if(pageFlipSession!==session)return
+    pageTurnAnimating=false
+    const list=$('articleDeck').querySelector(`[data-index="${session.current}"] .reaction-list`)
+    list?.classList.remove('pageflip-comments-out')
+  })
   return true
 }
-
 let pageFlipPrepareTimer=null
 function schedulePageFlipPrepare(delay=80){
   if(pageTurnMode!=='page')return

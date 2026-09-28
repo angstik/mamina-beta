@@ -13,6 +13,7 @@ let magazines=[],currentModel=null,displayArticles=[],currentArticleIndex=0
 let reactionOrder='asc',articleOrderMode='magazine',appName='MamiNa'
 const IS_BETA_PAGE_TURN=Boolean(window.MAMINA_BETA_PAGE_TURN)
 let pageTurnMode=IS_BETA_PAGE_TURN?'page':'slide',pageTurnAnimating=false
+let pageFlipModulePromise=null,pageFlipSession=null,pageFlipGeneration=0
 let composerArticleKey=null,safetyTimer=null,reconnectTimer=null,connectionClock=null,readTimer=null
 let telegramState='offline',reconnecting=false,lastConnectedAt=Number(localStorage.getItem('MAMINA_BETA_LAST_CONNECTED_AT')||0)
 let currentColor='#000000',savedRange=null,lastArticleCopy={text:'',at:0}
@@ -970,7 +971,7 @@ async function renderReader(){
   requestAnimationFrame(()=>{
     d.scrollLeft=currentArticleIndex*d.clientWidth
     activate(currentArticleIndex)
-    requestAnimationFrame(()=>{d.scrollLeft=currentArticleIndex*d.clientWidth;d.classList.remove('aligning')})
+    requestAnimationFrame(()=>{d.scrollLeft=currentArticleIndex*d.clientWidth;d.classList.remove('aligning');schedulePageFlipPrepare(120)})
   })
 }
 function renderComments(a,list){
@@ -1034,7 +1035,7 @@ window.addEventListener('resize',()=>{
     for(const v of document.querySelectorAll('.article-visual')){
       const img=v.querySelector('img');if(img)fitArticleVisual(v,img)
     }
-    const d=$('articleDeck');if(d&&!$('reader').hidden)d.scrollLeft=currentArticleIndex*d.clientWidth
+    const d=$('articleDeck');if(d&&!$('reader').hidden){d.scrollLeft=currentArticleIndex*d.clientWidth;schedulePageFlipPrepare(160)}
   },120)
 })
 
@@ -1067,58 +1068,188 @@ function activate(i,{soundMode='scheduled'}={}){
   else scheduleArticleSound(a,i,1000)
 }
 let scrollTimer
-$('articleDeck').onscroll=()=>{if(pageTurnAnimating||!$('composerModal').hidden||!$('motionComposer').hidden||!$('soundComposer').hidden)return;clearTimeout(scrollTimer);scrollTimer=setTimeout(()=>{const d=$('articleDeck'),i=Math.max(0,Math.min(displayArticles.length-1,Math.round(d.scrollLeft/d.clientWidth))),left=i*d.clientWidth;if(Math.abs(d.scrollLeft-left)>1)d.scrollTo({left,behavior:'auto'});if(i!==currentArticleIndex)activate(i)},90)}
-function stripCloneIds(root){
-  if(root.id)root.removeAttribute('id')
-  for(const el of root.querySelectorAll('[id]'))el.removeAttribute('id')
-  for(const el of root.querySelectorAll('button,input,select,textarea,[contenteditable]')){el.setAttribute('tabindex','-1');el.setAttribute('aria-hidden','true')}
+$('articleDeck').onscroll=()=>{if(pageTurnAnimating||!$('composerModal').hidden||!$('motionComposer').hidden||!$('soundComposer').hidden)return;clearTimeout(scrollTimer);scrollTimer=setTimeout(()=>{const d=$('articleDeck'),i=Math.max(0,Math.min(displayArticles.length-1,Math.round(d.scrollLeft/d.clientWidth))),left=i*d.clientWidth;if(Math.abs(d.scrollLeft-left)>1)d.scrollTo({left,behavior:'auto'});if(i!==currentArticleIndex){activate(i);schedulePageFlipPrepare()}},90)}
+
+function destroyPageFlip(){
+  const s=pageFlipSession
+  pageFlipSession=null
+  pageTurnAnimating=false
+  if(!s)return
+  try{s.flip?.destroy?.()}catch{}
+  try{s.host?.remove()}catch{}
 }
-function pageTurnArticle(next,delta){
-  const d=$('articleDeck'),current=d.querySelector(`[data-index="${currentArticleIndex}"]`)
-  if(!current||pageTurnAnimating){activate(next,{soundMode:'gesture'});d.scrollTo({left:next*d.clientWidth,behavior:'auto'});return}
-  const rect=current.getBoundingClientRect(),clone=current.cloneNode(true)
-  stripCloneIds(clone)
-  clone.removeAttribute('data-index')
-  const overlay=document.createElement('div')
-  overlay.className=`page-turn-overlay ${delta>0?'forward':'backward'}`
-  overlay.style.left=`${Math.max(0,rect.left)}px`
-  overlay.style.top=`${Math.max(0,rect.top)}px`
-  overlay.style.width=`${Math.min(innerWidth,rect.width)}px`
-  overlay.style.height=`${Math.min(innerHeight-Math.max(0,rect.top),rect.height)}px`
-  clone.classList.add('page-turn-sheet')
-  clone.style.width='100%';clone.style.height='100%';clone.style.minWidth='0';clone.style.overflow='hidden'
-  const fold=document.createElement('div');fold.className='page-turn-fold'
-  overlay.append(clone,fold)
-  document.body.appendChild(overlay)
-  pageTurnAnimating=true
-  d.scrollTo({left:next*d.clientWidth,behavior:'auto'})
-  activate(next,{soundMode:'gesture'})
-  void overlay.offsetWidth
-  overlay.classList.add('turning')
-  const finish=()=>{if(!pageTurnAnimating)return;pageTurnAnimating=false;overlay.remove()}
-  overlay.addEventListener('animationend',finish,{once:true})
-  setTimeout(finish,620)
+
+function ensurePageFlipModule(){
+  if(pageTurnMode!=='page'||matchMedia('(prefers-reduced-motion: reduce)').matches)return Promise.resolve(null)
+  if(!pageFlipModulePromise){
+    pageFlipModulePromise=import('page-flip').catch(e=>{
+      debug(e)
+      pageTurnMode='slide'
+      destroyPageFlip()
+      return null
+    })
+  }
+  return pageFlipModulePromise
 }
+
+function waitArticleImage(index,timeout=3500){
+  return new Promise(async resolve=>{
+    if(index<0||index>=displayArticles.length)return resolve(null)
+    await loadVisual(index)
+    const v=$('articleDeck').querySelector(`[data-index="${index}"] .article-visual`),img=v?.querySelector('img')
+    if(img?.complete&&img.naturalWidth)return resolve(img)
+    if(!img)return resolve(null)
+    let done=false
+    const finish=()=>{if(done)return;done=true;clearTimeout(timer);resolve(img.naturalWidth?img:null)}
+    const timer=setTimeout(finish,timeout)
+    img.addEventListener('load',finish,{once:true})
+    img.addEventListener('error',finish,{once:true})
+  })
+}
+
+function commentsFadeOut(index=currentArticleIndex){
+  const list=$('articleDeck').querySelector(`[data-index="${index}"] .reaction-list`)
+  if(list)list.classList.add('pageflip-comments-out')
+}
+
+function commentsReveal(index=currentArticleIndex){
+  const list=$('articleDeck').querySelector(`[data-index="${index}"] .reaction-list`)
+  if(!list)return
+  list.classList.remove('pageflip-comments-out','pageflip-comments-enter-asc','pageflip-comments-enter-desc')
+  const cls=reactionOrder==='asc'?'pageflip-comments-enter-asc':'pageflip-comments-enter-desc'
+  list.classList.add(cls)
+  const rows=[...list.querySelectorAll('.reaction,.empty')]
+  rows.forEach((row,i)=>{
+    const order=reactionOrder==='asc'?i:(rows.length-1-i)
+    row.style.setProperty('--comment-step',String(Math.min(order,12)))
+  })
+  setTimeout(()=>{
+    list.classList.remove(cls)
+    rows.forEach(row=>row.style.removeProperty('--comment-step'))
+  },760)
+}
+
+function pageFlipCornerFromPointer(){
+  return 'bottom'
+}
+
+async function preparePageFlipForCurrent(){
+  const generation=++pageFlipGeneration
+  destroyPageFlip()
+  const mod=await ensurePageFlipModule()
+  if(!mod||generation!==pageFlipGeneration||$('reader').hidden)return false
+  const current=currentArticleIndex
+  const indices=[current-1,current,current+1].filter(i=>i>=0&&i<displayArticles.length)
+  if(indices.length<2)return false
+  const images=await Promise.all(indices.map(waitArticleImage))
+  if(generation!==pageFlipGeneration||images.some(x=>!x))return false
+  const currentVisual=$('articleDeck').querySelector(`[data-index="${current}"] .article-visual`)
+  if(!currentVisual)return false
+  const rect=currentVisual.getBoundingClientRect()
+  if(rect.width<40||rect.height<40)return false
+
+  const host=document.createElement('div')
+  host.className='mamina-pageflip-host'
+  currentVisual.appendChild(host)
+  const startPage=Math.max(0,indices.indexOf(current))
+  const PageFlip=mod.PageFlip
+  if(!PageFlip){host.remove();pageTurnMode='slide';return false}
+
+  let flip
+  try{
+    flip=new PageFlip(host,{
+      width:Math.max(1,Math.round(rect.width)),
+      height:Math.max(1,Math.round(rect.height)),
+      size:'stretch',
+      minWidth:Math.max(1,Math.round(rect.width)),
+      maxWidth:Math.max(1,Math.round(rect.width)),
+      minHeight:Math.max(1,Math.round(rect.height)),
+      maxHeight:Math.max(1,Math.round(rect.height)),
+      autoSize:false,
+      drawShadow:true,
+      maxShadowOpacity:.42,
+      flippingTime:620,
+      usePortrait:true,
+      showCover:false,
+      mobileScrollSupport:false,
+      swipeDistance:24,
+      clickEventForward:false,
+      useMouseEvents:true,
+      disableFlipByClick:true,
+      startPage
+    })
+    flip.loadFromImages(images.map(img=>img.src))
+  }catch(e){
+    debug(e);host.remove();pageTurnMode='slide';return false
+  }
+
+  const session={flip,host,indices,startPage,current,changed:false,flipping:false}
+  pageFlipSession=session
+
+  flip.on('changeState',e=>{
+    if(pageFlipSession!==session)return
+    const state=String(e.data||'')
+    if(state==='flipping'){
+      session.flipping=true
+      pageTurnAnimating=true
+      commentsFadeOut(session.current)
+    }else if(state==='read'){
+      const changed=session.changed
+      pageTurnAnimating=false
+      if(!changed){
+        const list=$('articleDeck').querySelector(`[data-index="${session.current}"] .reaction-list`)
+        list?.classList.remove('pageflip-comments-out')
+      }
+    }
+  })
+  flip.on('flip',e=>{
+    if(pageFlipSession!==session)return
+    const slot=Number(e.data)
+    const target=session.indices[slot]
+    if(!Number.isInteger(target)||target===currentArticleIndex)return
+    session.changed=true
+    pageTurnAnimating=true
+    const d=$('articleDeck')
+    d.scrollTo({left:target*d.clientWidth,behavior:'auto'})
+    activate(target,{soundMode:'gesture'})
+    requestAnimationFrame(()=>commentsReveal(target))
+    setTimeout(()=>schedulePageFlipPrepare(),80)
+  })
+  return true
+}
+
+let pageFlipPrepareTimer=null
+function schedulePageFlipPrepare(delay=80){
+  if(pageTurnMode!=='page')return
+  clearTimeout(pageFlipPrepareTimer)
+  pageFlipPrepareTimer=setTimeout(()=>preparePageFlipForCurrent().catch(debug),delay)
+}
+
 function goArticle(delta){
   if(pageTurnAnimating||!$('composerModal').hidden||!$('motionComposer').hidden||!$('soundComposer').hidden)return
   const next=Math.max(0,Math.min(displayArticles.length-1,currentArticleIndex+delta))
   if(next===currentArticleIndex)return
+  const s=pageFlipSession
+  if(pageTurnMode==='page'&&s?.flip&&s.current===currentArticleIndex){
+    commentsFadeOut(currentArticleIndex)
+    pageTurnAnimating=true
+    try{
+      if(delta>0)s.flip.flipNext(pageFlipCornerFromPointer())
+      else s.flip.flipPrev(pageFlipCornerFromPointer())
+      return
+    }catch(e){debug(e);pageTurnAnimating=false}
+  }
   const d=$('articleDeck')
-  const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches
-  if(pageTurnMode==='page'&&!reduced)pageTurnArticle(next,delta)
-  else{activate(next,{soundMode:'gesture'});d.scrollTo({left:next*d.clientWidth,behavior:'smooth'})}
+  activate(next,{soundMode:'gesture'})
+  d.scrollTo({left:next*d.clientWidth,behavior:'smooth'})
 }
+
 function installReactionSwipe(list){
   let start=null
   list.addEventListener('touchstart',e=>{
     if(e.touches.length!==1||!$('composerModal').hidden||!$('motionComposer').hidden||!$('soundComposer').hidden)return
     const t=e.touches[0];start={x:t.clientX,y:t.clientY}
   },{passive:true})
-  list.addEventListener('touchmove',e=>{
-    if(pageTurnMode!=='page'||!start||e.touches.length!==1)return
-    const t=e.touches[0],dx=t.clientX-start.x,dy=t.clientY-start.y
-    if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)*1.1)e.preventDefault()
-  },{passive:false})
   list.addEventListener('touchend',e=>{
     if(!start||!e.changedTouches?.length)return
     const t=e.changedTouches[0],dx=t.clientX-start.x,dy=t.clientY-start.y
@@ -1127,7 +1258,6 @@ function installReactionSwipe(list){
   },{passive:true})
   list.addEventListener('touchcancel',()=>{start=null},{passive:true})
 }
-
 
 function clampPan(container,img,scale,tx,ty){
   if(!img||scale<=1)return {tx:0,ty:0}
@@ -1170,9 +1300,6 @@ function installArticleGestures(container,index){
       const[a,b]=e.touches
       st.scale=Math.max(1,Math.min(4,pinch.scale*Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY)/pinch.d))
       apply()
-    }else if(e.touches.length===1&&start&&st.scale===1&&pageTurnMode==='page'){
-      const t=e.touches[0],dx=t.clientX-start.x,dy=t.clientY-start.y
-      if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)*1.1)e.preventDefault()
     }else if(e.touches.length===1&&start&&st.scale>1){
       e.preventDefault()
       const t=e.touches[0],now=performance.now(),dt=Math.max(1,now-lastMove.time)

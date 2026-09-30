@@ -217,3 +217,18 @@ button,input,select{font:inherit}button{cursor:pointer}
 .help-button{min-height:38px;padding:7px 10px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:inherit;font-weight:700}
 .help-button:active{transform:scale(.97)}
 @media(max-width:500px){.help-button{min-height:36px;padding:6px 9px;font-size:.82rem}}
+
+/* Help & improvements channel beta.8 */
+.home-logo-wrap{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap}
+.help-channel-home{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:inherit;padding:9px 13px;font-weight:800;box-shadow:0 2px 8px #0002}
+.help-channel-home[hidden]{display:none}
+.help-channel-icon{font-size:1.15rem}.help-channel-unread{min-width:22px;height:22px;border-radius:999px;display:grid;place-items:center;background:#8883;font-size:.72rem}
+.help-channel-home.has-unread .help-channel-unread{background:var(--accent);color:#fff}
+.admin-help-channel{margin:14px 0;padding:12px;border:1px solid var(--line);border-radius:13px;background:#8881}
+.admin-help-channel h3{margin:0 0 6px}.admin-help-channel textarea{width:100%;resize:vertical;padding:10px;border-radius:9px;border:1px solid var(--line);background:var(--bg);color:inherit}
+.admin-help-preview{display:block;width:100%;height:auto;max-height:420px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:10px;margin:8px 0}
+.admin-help-capacity{font-size:.82rem;padding:5px 0}.admin-help-capacity.over{color:#b42318;font-weight:700}
+.admin-help-list-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px}.admin-help-list-head button{width:auto}
+.admin-help-list{display:grid;gap:7px;margin-top:8px}.admin-help-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
+.admin-help-row-info{display:flex;flex-direction:column;min-width:0}.admin-help-row-info strong,.admin-help-row-info span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.admin-help-row-info span{font-size:.75rem;opacity:.68}
+.admin-help-row-actions{display:flex;gap:5px}.admin-help-row-actions button{width:auto;margin:0;padding:7px 9px}.admin-help-row-actions .danger{background:#b42318;color:#fff;border-color:#b42318}

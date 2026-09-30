@@ -12,7 +12,7 @@
   <title>MamiNa β</title>
 </head>
 <body>
-<div id="betaBuildBadge" style="position:fixed;z-index:5000;top:6px;left:50%;transform:translateX(-50%);padding:5px 10px;border-radius:999px;background:#f0a020;color:#201600;font:700 12px system-ui;box-shadow:0 2px 8px #0003;pointer-events:none">MamiNa β · 1.1.30-beta.7</div>
+<div id="betaBuildBadge" style="position:fixed;z-index:5000;top:6px;left:50%;transform:translateX(-50%);padding:5px 10px;border-radius:999px;background:#f0a020;color:#201600;font:700 12px system-ui;box-shadow:0 2px 8px #0003;pointer-events:none">MamiNa β · 1.1.30-beta.8</div>
 
 <div id="splash" class="splash" hidden>
   <img class="splash-brand-image" src="/mamina/mamina-v08-512.png?v=101" alt="MamiNa">
@@ -27,6 +27,11 @@
 <main id="home" class="home">
   <div class="home-logo-wrap">
     <img class="home-logo" src="/mamina/mamina-v08-192.png?v=10" alt="MamiNa">
+    <button id="helpChannelHome" class="help-channel-home" type="button" hidden>
+      <span class="help-channel-icon">💬</span>
+      <span>Aide & idées</span>
+      <span id="helpChannelUnread" class="help-channel-unread">0</span>
+    </button>
   </div>
   <header class="homebar">
     <div class="homebrand">
@@ -266,6 +271,31 @@
         <select id="adminTopicSelect"></select>
         <button id="adminRefreshTopics" type="button">Actualiser</button>
       </div>
+
+      <section class="admin-help-channel">
+        <h3>Canal Aide & améliorations</h3>
+        <p class="subtle">Les articles utilisent exactement le lecteur d’une revue. L’image finale est fabriquée ici puis publiée dans le sujet Telegram dédié.</p>
+        <label for="adminHelpLayout">Disposition</label>
+        <select id="adminHelpLayout">
+          <option value="portrait">Portrait · texte à droite</option>
+          <option value="landscape">Paysage · texte en bas</option>
+        </select>
+        <label for="adminHelpPhoto">Photo 4:3</label>
+        <input id="adminHelpPhoto" type="file" accept="image/*">
+        <label for="adminHelpTitle">Titre (facultatif)</label>
+        <input id="adminHelpTitle" maxlength="160" placeholder="Titre de l’article">
+        <label for="adminHelpText">Texte</label>
+        <textarea id="adminHelpText" rows="7" maxlength="3500" placeholder="Texte de l’article"></textarea>
+        <div class="admin-help-capacity"><span id="adminHelpCapacity">Choisis une photo.</span></div>
+        <canvas id="adminHelpPreview" class="admin-help-preview" width="1200" height="900"></canvas>
+        <button id="adminHelpPublish" type="button" disabled>Publier l’article</button>
+        <div id="adminHelpStatus" class="status"></div>
+        <div class="admin-help-list-head">
+          <strong>Articles publiés</strong>
+          <button id="adminHelpRefresh" type="button" class="secondary">Actualiser</button>
+        </div>
+        <div id="adminHelpList" class="admin-help-list"></div>
+      </section>
 
       <label for="adminPdf">Nouveau PDF Famileo</label>
       <input id="adminPdf" type="file" accept="application/pdf">

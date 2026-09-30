@@ -289,6 +289,20 @@ export class TelegramGateway {
     return { rootId:Number(found.canonical.message.id), duplicates:found.duplicates.map(x=>Number(x.message.id)), messages }
   }
 
+  async postHelpArticle(peer,topicId,file,meta) {
+    return this.tg.sendMedia(peer,InputMedia.photo(file),{
+      threadId:topicId,
+      caption:withMeta(meta?.title?String(meta.title):'Article MamiNa',meta),
+      silent:true,
+    })
+  }
+
+  async postHelpArticleContent(peer,topicId,rootId,articleKey,text) {
+    return this.tg.sendText(peer,withMeta(String(text||''),{kind:'help-content',type:'text',articleKey:String(articleKey)}),{
+      threadId:topicId,replyTo:rootId,silent:true,
+    })
+  }
+
   async postTextComment(peer, topicId, rootId, articleKey, text, format='mamina-markdown-v1') {
     return this.tg.sendText(peer, withMeta(text, { kind:'message', type:'text', format, articleKey }), {
       threadId: topicId,

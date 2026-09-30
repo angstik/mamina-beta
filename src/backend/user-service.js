@@ -19,7 +19,9 @@ function topicKey(peer, topicId) { return `${idOfPeer(peer)}:${Number(topicId)}`
 function isMagazineTopic(topic) { return /famileo/i.test(String(topic?.title || '')) }
 function topicIdOf(topic) { return Number(topic?.id || topic?.topicId || 0) }
 function rowMetaText(message) { return message?.text || message?.caption || '' }
-const PARAMS_TOPIC='params', CATALOG_TOPIC='catalog'
+const PARAMS_TOPIC='params', CATALOG_TOPIC='catalog', HELP_TOPIC='Aide & améliorations MamiNa'
+const HELP_MAGAZINE_PREFIX='mamina-help'
+function helpMagazineId(peer){return `${HELP_MAGAZINE_PREFIX}:${idOfPeer(peer)}`}
 function exactTopic(topic,name){return String(topic?.title||'').trim().toLowerCase()===name}
 function slotCode(slot){return slot==='top'?'h':slot==='bottom'?'b':'p'}
 function clamp01(n){return Math.max(0,Math.min(1,Number(n)||0))}
@@ -229,21 +231,9 @@ export class UserMaminaService {
     const magazine=await getMagazine(item.magazineId)
     if(!magazine) throw new Error('Revue de l’animation en attente introuvable.')
 
-    let bytes=await getAsset(`pdf:${magazine.magazineId}`)
-    if(!bytes) bytes=await getAsset(`staging-pdf:${magazine.magazineId}`)
-    if(!bytes) throw new Error('PDF local requis pour résoudre l’animation en attente.')
-
-    const pdf=await FamileoPdf.load(bytes)
-    try {
-      const article=pdf.articles().find(a=>a.articleKey===item.articleKey)
-      if(!article) throw new Error('Article de l’animation en attente introuvable.')
-      const full=await this.gateway.topicMessages(this.dialog.peer,Number(item.topicId),{limit:Infinity})
-      const {rootId}=await this.gateway.ensureRoot(this.dialog.peer,Number(item.topicId),pdf.magazine,article,full)
-      const sentMessage=await this.gateway.postEmojiMotion(this.dialog.peer,Number(item.topicId),rootId,item.articleKey,item.motion)
-      return {sentMessage,magazine,article}
-    } finally {
-      try { await pdf.doc?.cleanup?.(); await pdf.doc?.destroy?.() } catch {}
-    }
+    const {article,rootId}=await this._articleRootContext(magazine,item.articleKey,item.topicId)
+    const sentMessage=await this.gateway.postEmojiMotion(this.dialog.peer,Number(item.topicId),rootId,item.articleKey,item.motion)
+    return {sentMessage,magazine,article}
   }
 
   async _persistSentMotionResult(item,result) {
@@ -501,7 +491,10 @@ export class UserMaminaService {
     const allTopics=await this.gateway.topics(peer)
     try { await this.loadRemoteParams(allTopics) } catch(e) { warn('params','Paramètres distants indisponibles',{message:e?.message||String(e)}) }
     info('sync','Sujets reçus',{count:allTopics.length})
-    const topics=allTopics.filter(isMagazineTopic).sort((a,b)=>topicIdOf(b)-topicIdOf(a))
+    const helpTopic=allTopics.find(t=>exactTopic(t,HELP_TOPIC))
+    let helpRecord=null
+    if(helpTopic){try{helpRecord=await this.syncHelpTopic(helpTopic)}catch(e){warn('help','Canal d’aide non synchronisé',{message:e?.message||String(e)})}}
+    const topics=allTopics.filter(isMagazineTopic).filter(t=>!exactTopic(t,HELP_TOPIC)).sort((a,b)=>topicIdOf(b)-topicIdOf(a))
     info('sync','Sujets Famileo détectés',{count:topics.length,titles:topics.slice(0,10).map(t=>t.title)})
     const cached=await listMagazines()
     const cachedByTopic=new Map(cached.map(m=>[m.topicKey,m]))
@@ -532,7 +525,7 @@ export class UserMaminaService {
     for(const m of found.slice(0,2)) await this.ensureFullCache(m)
     for(const m of found.slice(2)) await this.dropFullCache(m)
 
-    const keepIds=found.map(m=>m.magazineId)
+    const keepIds=[...found.map(m=>m.magazineId),...(helpRecord?[helpRecord.magazineId]:[])]
     const before=await listMagazines()
     for(const old of before) if(!keepIds.includes(old.magazineId)){ await deleteAsset(`cover:${old.magazineId}`); await deleteAsset(`pdf:${old.magazineId}`); await deleteAsset(`staging-pdf:${old.magazineId}`); await deleteMessagesByMagazine(old.magazineId); await replaceArticles(old.magazineId,[]) }
     await pruneToMagazineIds(keepIds)
@@ -626,7 +619,127 @@ export class UserMaminaService {
     return record
   }
 
+  async syncHelpTopic(topic) {
+    if(!this.dialog)throw new Error('Aucun groupe sélectionné.')
+    const peer=this.dialog.peer,tid=topicIdOf(topic),key=topicKey(peer,tid),magazineId=helpMagazineId(peer)
+    const raw=await this.gateway.topicMessages(peer,tid,{limit:Infinity})
+    const models=raw.map(TelegramGateway.messageModel)
+    const state=new Map()
+    for(const row of models.filter(r=>r.meta?.kind==='help-state'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id)){
+      state.set(String(row.meta.articleKey),String(row.meta.visibility||'visible'))
+    }
+    const roots=models.filter(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article'&&r.meta?.articleKey&&r.hasMedia).sort((a,b)=>a.id-b.id)
+    const contents=new Map()
+    for(const row of models.filter(r=>r.meta?.kind==='help-content'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id)){
+      contents.set(String(row.meta.articleKey),stripMeta(row.text))
+    }
+    const articles=[]
+    for(const root of roots){
+      const articleKey=String(root.meta.articleKey),visibility=state.get(articleKey)||String(root.meta.visibility||'visible')
+      if(visibility!=='visible')continue
+      const rawMessage=raw.find(m=>Number(m.id)===Number(root.id))
+      if(!rawMessage?.media)continue
+      const assetKey=`article:${articleKey}`
+      if(!await getAsset(assetKey)){
+        try{await putAsset(assetKey,await this.gateway.downloadMessageMedia(rawMessage))}catch(e){warn('help','Image d’article non téléchargée',{articleKey,message:e?.message||String(e)})}
+      }
+      const layout=String(root.meta.layout||'portrait')
+      articles.push({
+        magazineId,articleKey,page:articles.length+1,slot:'p',
+        pageText:contents.get(articleKey)||'',articleText:contents.get(articleKey)||'',
+        authorName:root.author||'MamiNa',articleDateLabel:root.date?new Date(root.date).toLocaleDateString('fr-FR'):'',
+        bodyText:contents.get(articleKey)||'',lines:[],dateIso:root.date?String(root.date).slice(0,10):null,
+        layout:layout==='portrait'?'text_right':'text_bottom',
+        helpLayout:layout,helpTitle:String(root.meta.title||''),helpRootMessageId:Number(root.id),
+        renderBounds:{x0:0,y0:0,x1:1,y1:1},
+        photoBounds:root.meta.photoBounds||null,textBounds:root.meta.textBounds||null,avatarBounds:null,collages:[],
+        source:'help',
+      })
+    }
+    const resolved=resolveRowsToArticles(models,articles)
+    const comments=[...resolved.byArticle.values()].flat(),motions=[...resolved.motionsBy.values()].flat()
+    const read=await this.readMap(),unread=countUnreadMessagesForRows(models,read)
+    const record={
+      source:'help',title:'Aide & améliorations',issue:null,date:roots.length?String(roots[roots.length-1].date||'').slice(0,10):null,
+      magazineKey:magazineId,magazineId,pageCount:articles.length,appTitle:await settings.get('appTitle','MamiNa'),
+      topicId:tid,topicKey:key,topicTitle:topic.title||HELP_TOPIC,reactionCount:comments.length,motionCount:motions.length,
+      unreadCount:unread,unreadMode:'messages-v2',fullyCached:true,lastMessageId:models.reduce((m,r)=>Math.max(m,Number(r.id)||0),0),
+      updatedAt:new Date().toISOString(),
+    }
+    await putMagazine(record)
+    await replaceArticles(magazineId,articles)
+    await deleteMessagesByMagazine(magazineId)
+    await this.persistResolvedMessages(record,articles,models)
+    await putTopicState({topicKey:key,topicId:tid,cursor:record.lastMessageId,updatedAt:record.updatedAt})
+    await settings.set('helpMagazineId',magazineId)
+    return record
+  }
+
+  async helpArticleAdminRows() {
+    if(!this.gateway||!this.dialog)throw new Error('Telegram non initialisé.')
+    const topics=await this.gateway.topics(this.dialog.peer)
+    const topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
+    if(!topic)return[]
+    const raw=await this.gateway.topicMessages(this.dialog.peer,topicIdOf(topic),{limit:Infinity})
+    const models=raw.map(TelegramGateway.messageModel)
+    const state=new Map()
+    for(const row of models.filter(r=>r.meta?.kind==='help-state'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id))state.set(String(row.meta.articleKey),String(row.meta.visibility||'visible'))
+    return models.filter(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id).map(r=>({
+      articleKey:String(r.meta.articleKey),title:String(r.meta.title||'Article'),layout:String(r.meta.layout||'portrait'),
+      visibility:state.get(String(r.meta.articleKey))||String(r.meta.visibility||'visible'),date:r.date||'',rootMessageId:Number(r.id)
+    }))
+  }
+
+  async adminCreateHelpArticle(file,{title='',text='',layout='portrait',photoBounds=null,textBounds=null}={}) {
+    if(!this.gateway||!this.dialog)throw new Error('Telegram non initialisé.')
+    if(!file)throw new Error('Image d’article manquante.')
+    const clean=String(text||'').trim();if(!clean)throw new Error('Texte manquant.')
+    if(clean.length>3500)throw new Error('Texte trop long.')
+    const peer=this.dialog.peer
+    let topics=await this.gateway.topics(peer),topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
+    if(!topic){const created=await this.gateway.createTopic(peer,HELP_TOPIC);topics=await this.gateway.topics(peer);topic=topics.find(t=>topicIdOf(t)===Number(created.topicId))||{id:created.topicId,title:HELP_TOPIC}}
+    const tid=topicIdOf(topic),magazineId=helpMagazineId(peer),articleKey=`${magazineId}:a${Date.now().toString(36)}-${Math.random().toString(36).slice(2,7)}`
+    const roots=(await this.gateway.topicMessages(peer,tid,{limit:Infinity})).map(TelegramGateway.messageModel).filter(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article')
+    const meta={kind:'root',type:'help-article',version:1,magazineId,articleKey,page:roots.length+1,slot:'p',layout:layout==='landscape'?'landscape':'portrait',title:String(title||'').trim().slice(0,160),visibility:'visible',photoBounds,textBounds}
+    const root=await this.gateway.postHelpArticle(peer,tid,file,meta)
+    try{await this.gateway.postHelpArticleContent(peer,tid,Number(root.id),articleKey,clean)}
+    catch(e){try{await this.gateway.deleteMessagesById(peer,[Number(root.id)])}catch{};throw e}
+    await this.syncHelpTopic(topic)
+    return {articleKey,topicId:tid,rootMessageId:Number(root.id)}
+  }
+
+  async adminSetHelpArticleVisibility(articleKey,visible) {
+    if(!this.gateway||!this.dialog)throw new Error('Telegram non initialisé.')
+    const topics=await this.gateway.topics(this.dialog.peer),topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
+    if(!topic)throw new Error('Sujet Aide & améliorations introuvable.')
+    await this.gateway.postSystemText(this.dialog.peer,topicIdOf(topic),visible?'👁️ Article visible':'🙈 Article masqué',{kind:'help-state',type:'visibility',articleKey:String(articleKey),visibility:visible?'visible':'hidden'})
+    await this.syncHelpTopic(topic)
+    return this.helpArticleAdminRows()
+  }
+
+  async adminDeleteHelpArticle(articleKey) {
+    if(!this.gateway||!this.dialog)throw new Error('Telegram non initialisé.')
+    const topics=await this.gateway.topics(this.dialog.peer),topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
+    if(!topic)throw new Error('Sujet Aide & améliorations introuvable.')
+    const tid=topicIdOf(topic),raw=await this.gateway.topicMessages(this.dialog.peer,tid,{limit:Infinity}),models=raw.map(TelegramGateway.messageModel)
+    const root=models.find(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article'&&String(r.meta?.articleKey||'')===String(articleKey))
+    if(!root)throw new Error('Article introuvable.')
+    const byId=new Map(models.map(r=>[Number(r.id),r]))
+    const belongs=row=>{
+      if(String(row.meta?.articleKey||'')===String(articleKey))return true
+      let id=Number(row.replyToId||0),guard=0
+      while(id&&guard++<50){if(id===Number(root.id))return true;id=Number(byId.get(id)?.replyToId||0)}
+      return false
+    }
+    const ids=models.filter(r=>Number(r.id)===Number(root.id)||belongs(r)).map(r=>Number(r.id))
+    await this.gateway.deleteMessagesById(this.dialog.peer,ids)
+    await deleteAsset(`article:${articleKey}`);await deleteAsset(`photo:${articleKey}`)
+    await this.syncHelpTopic(topic)
+    return this.helpArticleAdminRows()
+  }
+
   async syncKnownTopic(magazine) {
+    if(magazine?.source==='help')return this.syncHelpTopic({id:magazine.topicId,topicId:magazine.topicId,title:magazine.topicTitle||HELP_TOPIC})
     const peer=this.dialog.peer, state=await getTopicState(magazine.topicKey)
     info('sync.known','Synchronisation revue connue',{magazineId:magazine.magazineId,topicId:magazine.topicId})
     const cursor=Number(state?.cursor||magazine.lastMessageId||0)
@@ -772,7 +885,7 @@ export class UserMaminaService {
   }
 
   async magazineSummaries(rows=null) {
-    const magazines=(rows||await listMagazines()).slice(0,10)
+    const magazines=(rows||await listMagazines()).filter(m=>m.source!=='help').slice(0,10)
     return Promise.all(magazines.map(async m=>{
       let motionCount=Number.isFinite(Number(m.motionCount))?Number(m.motionCount):null
       if(motionCount==null){
@@ -786,6 +899,13 @@ export class UserMaminaService {
   async openMagazineLocalFirst(magazineId) {
     const magazine=await getMagazine(magazineId)
     if(!magazine) throw new Error('Revue inconnue.')
+
+    if(magazine.source==='help'){
+      const articles=await listArticles(magazineId)
+      const rows=await listMessagesByMagazine(magazineId)
+      this.current={magazine,pdf:null,pdfBytes:null,articles,rows}
+      return this.currentView()
+    }
 
     const bytes=await getAsset(`pdf:${magazineId}`)
     const storedArticles=await listArticles(magazineId)
@@ -810,6 +930,24 @@ export class UserMaminaService {
       throw new Error('Cette revue n’est pas entièrement disponible hors ligne. Connecte Telegram pour la charger.')
     }
     return this.openMagazine(magazineId)
+  }
+
+  async helpSummary() {
+    const rows=await listMagazines()
+    const help=rows.find(m=>m.source==='help')||null
+    if(!help)return null
+    return {...help,unreadCount:Number(help.unreadCount||0),reactionCount:Number(help.reactionCount||0),motionCount:Number(help.motionCount||0)}
+  }
+
+  async openHelpChannel() {
+    let help=(await listMagazines()).find(m=>m.source==='help')||null
+    if(!help&&this.gateway&&this.dialog){
+      const topics=await this.gateway.topics(this.dialog.peer)
+      const topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
+      if(topic)help=await this.syncHelpTopic(topic)
+    }
+    if(!help)throw new Error('Le canal Aide & améliorations n’est pas encore initialisé.')
+    return this.openMagazineLocalFirst(help.magazineId)
   }
 
   async openMagazine(magazineId) {
@@ -947,8 +1085,7 @@ export class UserMaminaService {
     }
 
     try {
-      const full=await this.gateway.topicMessages(this.dialog.peer,Number(this.current.magazine.topicId),{limit:Infinity})
-      const {rootId}=await this.gateway.ensureRoot(this.dialog.peer,Number(this.current.magazine.topicId),this.current.magazine,article,full)
+      const {rootId}=await this._articleRootContext(this.current.magazine,articleKey,this.current.magazine.topicId)
       const sent=await this.gateway.postEmojiMotion(this.dialog.peer,Number(this.current.magazine.topicId),rootId,articleKey,normalized)
       await this._persistSentMotionResult({articleKey,magazineId:this.current.magazine.magazineId,motion:normalized}, {sentMessage:sent,magazine:this.current.magazine,article})
       return this.currentView()
@@ -971,8 +1108,7 @@ export class UserMaminaService {
     const magazine=await getMagazine(op.magazineId);if(!magazine)throw new Error('Revue introuvable pour le son.')
     const articles=await listArticles(op.magazineId),article=articles.find(a=>a.articleKey===op.articleKey)||this.current?.articles?.find(a=>a.articleKey===op.articleKey)
     if(!article)throw new Error('Article introuvable pour le son.')
-    const full=await this.gateway.topicMessages(this.dialog.peer,Number(op.topicId),{limit:Infinity})
-    const {rootId}=await this.gateway.ensureRoot(this.dialog.peer,Number(op.topicId),magazine,article,full)
+    const {rootId}=await this._articleRootContext(magazine,op.articleKey,op.topicId)
     const sent=await this.gateway.postArticleSound(this.dialog.peer,Number(op.topicId),rootId,op.articleKey,op.sound)
     const row=TelegramGateway.messageModel(sent)
     const payload={...row,articleKey:op.articleKey,key:`${magazine.magazineId}:${row.id}`,magazineId:magazine.magazineId,topicKey:magazine.topicKey}
@@ -1015,8 +1151,7 @@ export class UserMaminaService {
     const magazine=await getMagazine(op.magazineId);if(!magazine)throw new Error('Revue introuvable pour la suppression.')
     const articles=await listArticles(op.magazineId),article=articles.find(a=>a.articleKey===op.articleKey)||this.current?.articles?.find(a=>a.articleKey===op.articleKey)
     if(!article)throw new Error('Article introuvable pour la suppression.')
-    const full=await this.gateway.topicMessages(this.dialog.peer,Number(op.topicId),{limit:Infinity})
-    const {rootId}=await this.gateway.ensureRoot(this.dialog.peer,Number(op.topicId),magazine,article,full)
+    const {rootId}=await this._articleRootContext(magazine,op.articleKey,op.topicId)
     const marker=await this.gateway.postDeletionMarker(this.dialog.peer,Number(op.topicId),rootId,op.articleKey,Number(op.targetMessageId),op.targetKind)
     // Once the tombstone exists, direct Telegram deletion is best-effort only.
     try{await this.gateway.deleteMessagesById(this.dialog.peer,[Number(op.targetMessageId)])}catch(e){warn('delete','Suppression Telegram directe impossible, tombstone publié',{messageId:op.targetMessageId,message:e?.message||String(e)})}
@@ -1117,30 +1252,37 @@ export class UserMaminaService {
     }
   }
 
+  async _articleRootContext(magazine,articleKey,topicId) {
+    const articles=await listArticles(magazine.magazineId)
+    const article=articles.find(a=>a.articleKey===articleKey)||this.current?.articles?.find(a=>a.articleKey===articleKey)
+    if(!article)throw new Error('Article introuvable.')
+    const full=await this.gateway.topicMessages(this.dialog.peer,Number(topicId),{limit:Infinity})
+    if(magazine.source==='help'){
+      const models=full.map(TelegramGateway.messageModel)
+      const root=models.find(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article'&&String(r.meta?.articleKey||'')===String(articleKey))
+      if(!root)throw new Error('Racine de l’article d’aide introuvable.')
+      return {article,rootId:Number(root.id),full}
+    }
+    let bytes=await getAsset(`pdf:${magazine.magazineId}`)
+    if(!bytes)bytes=await getAsset(`staging-pdf:${magazine.magazineId}`)
+    if(!bytes)throw new Error('PDF local requis pour résoudre l’article.')
+    const pdf=await FamileoPdf.load(bytes)
+    try{
+      const pdfArticle=pdf.articles().find(a=>a.articleKey===articleKey)||article
+      const {rootId}=await this.gateway.ensureRoot(this.dialog.peer,Number(topicId),pdf.magazine,pdfArticle,full)
+      return {article:pdfArticle,rootId,full}
+    }finally{try{await pdf.doc?.cleanup?.();await pdf.doc?.destroy?.()}catch{}}
+  }
+
   async _sendTextNow(item) {
     if(!this.gateway || !this.dialog) throw new Error('Telegram non initialisé.')
     const magazine=await getMagazine(item.magazineId)
     if(!magazine) throw new Error('Revue de la file d’attente introuvable.')
-
-    let bytes=await getAsset(`pdf:${magazine.magazineId}`)
-    if(!bytes) bytes=await getAsset(`staging-pdf:${magazine.magazineId}`)
-    if(!bytes) throw new Error('PDF local requis pour résoudre l’article en attente.')
-
-    const pdf=await FamileoPdf.load(bytes)
-    try {
-      const article=pdf.articles().find(a=>a.articleKey===item.articleKey)
-      if(!article) throw new Error('Article de la file d’attente introuvable.')
-      const full=await this.gateway.topicMessages(this.dialog.peer,Number(item.topicId),{limit:Infinity})
-      const {rootId}=await this.gateway.ensureRoot(
-        this.dialog.peer,Number(item.topicId),pdf.magazine,article,full
-      )
-      const sentMessage=await this.gateway.postTextComment(
-        this.dialog.peer,Number(item.topicId),rootId,item.articleKey,item.text,item.format||'mamina-markdown-v1'
-      )
-      return {sentMessage,magazine,article}
-    } finally {
-      try { await pdf.doc?.cleanup?.(); await pdf.doc?.destroy?.() } catch {}
-    }
+    const {article,rootId}=await this._articleRootContext(magazine,item.articleKey,item.topicId)
+    const sentMessage=await this.gateway.postTextComment(
+      this.dialog.peer,Number(item.topicId),rootId,item.articleKey,item.text,item.format||'mamina-markdown-v1'
+    )
+    return {sentMessage,magazine,article}
   }
 
   async _persistSentResult(item,result) {
@@ -1235,6 +1377,7 @@ export class UserMaminaService {
     if(!force && await settings.get('derivedArticleGeometryVersion','')===target)return {updated:0,cleared:0}
     let updated=0,missing=0
     for(const magazine of await listMagazines()){
+      if(magazine.source==='help')continue
       const bytes=await getAsset(`parse:${magazine.magazineId}`)
       if(!bytes){missing++;continue}
       try{
@@ -1311,6 +1454,22 @@ export class UserMaminaService {
     const assetKey=`photo:${articleKey}`
     const cached=await getAsset(assetKey)
     if(cached) return {blob:cached,source:'local-photo'}
+
+    if(this.current.magazine?.source==='help'){
+      const article=this.current.articles.find(a=>a.articleKey===articleKey)
+      const source=await getAsset(`article:${articleKey}`)
+      if(!article||!source)throw new Error('Photo de l’article d’aide indisponible.')
+      const bounds=article.photoBounds||{x0:0,y0:0,x1:1,y1:1}
+      const bitmap=await createImageBitmap(source)
+      try{
+        const sx=Math.max(0,Math.round(bounds.x0*bitmap.width)),sy=Math.max(0,Math.round(bounds.y0*bitmap.height))
+        const sw=Math.max(1,Math.round((bounds.x1-bounds.x0)*bitmap.width)),sh=Math.max(1,Math.round((bounds.y1-bounds.y0)*bitmap.height))
+        const canvas=document.createElement('canvas');canvas.width=sw;canvas.height=sh
+        canvas.getContext('2d').drawImage(bitmap,sx,sy,sw,sh,0,0,sw,sh)
+        const blob=await canvasBlob(canvas,'image/jpeg',.92);await putAsset(assetKey,blob)
+        return {blob,source:'help-photo'}
+      }finally{bitmap.close?.()}
+    }
 
     const task=async()=>{
       const secondCheck=await getAsset(assetKey)

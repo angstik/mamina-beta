@@ -1,5 +1,5 @@
 const CACHE_PREFIX='mamina-beta-shell-'
-const CACHE_NAME=CACHE_PREFIX+'1.1.37-beta.1'
+const CACHE_NAME=CACHE_PREFIX+'1.1.37-beta.2'
 const SHELL=['./','./index.html','./master.html','./manifest.webmanifest','./telegram-secret.json','/mamina/apple-touch-icon-v08.png','/mamina/mamina-v08-192.png','/mamina/mamina-v08-512.png']
 
 async function cacheResponse(cache,url,response){

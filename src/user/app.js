@@ -3,7 +3,7 @@ import './page-turn.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.37-beta.1'
+const APP_VERSION='1.1.37-beta.2'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -147,6 +147,13 @@ async function refreshPending(){
 async function localHome(){
   await loadSettings()
   magazines=await service.magazineSummaries()
+  const help=await service.helpSummary()
+  const helpButton=$('helpChannelHome')
+  helpButton.hidden=!help
+  if(help){
+    $('helpChannelUnread').textContent=String(help.unreadCount||0)
+    helpButton.classList.toggle('has-unread',Number(help.unreadCount||0)>0)
+  }
   await renderMagazineList()
   await refreshPending()
 }
@@ -425,36 +432,48 @@ function saveReaderState(articleKey=currentArticle()?.articleKey){
 }
 function clearReaderState(){localStorage.removeItem(READER_STATE_KEY)}
 
+async function enterReaderModel(model,preferredArticleKey=null,restoring=false,{offerAvatar=true}={}){
+  currentModel=model
+  await loadSettings()
+  displayArticles=orderArticles(currentModel.articles)
+  if(!displayArticles.length)throw new Error('Aucun article disponible.')
+  const preferred=preferredArticleKey?displayArticles.findIndex(a=>a.articleKey===preferredArticleKey):-1
+  const unread=displayArticles.findIndex(a=>a.unreadCount>0)
+  currentArticleIndex=preferred>=0?preferred:(unread>=0?unread:0)
+  $('home').hidden=true;$('reader').hidden=false
+  saveReaderState(displayArticles[currentArticleIndex]?.articleKey)
+  await renderReader()
+  if(offerAvatar)setTimeout(()=>maybeOfferFamileoAvatar(),420)
+  if(currentModel.magazine?.source!=='help'&&displayArticles.some(a=>!a.photoBounds||!a.authorName)){
+    setTimeout(async()=>{
+      try{
+        await service.ensureCurrentPdf()
+        const keep=currentArticle()?.articleKey
+        currentModel=await service.currentView()
+        displayArticles=orderArticles(currentModel.articles)
+        const idx=displayArticles.findIndex(a=>a.articleKey===keep)
+        if(idx>=0)currentArticleIndex=idx
+      }catch(e){debug(e)}
+    },500)
+  }
+}
 async function openMagazine(id,preferredArticleKey=null,restoring=false){
   try{
     showActivity(restoring?'Restauration de la revue…':'Ouverture locale de la revue…')
-    currentModel=await service.openMagazineLocalFirst(id)
-    await loadSettings()
-    displayArticles=orderArticles(currentModel.articles)
-    const preferred=preferredArticleKey?displayArticles.findIndex(a=>a.articleKey===preferredArticleKey):-1
-    const unread=displayArticles.findIndex(a=>a.unreadCount>0)
-    currentArticleIndex=preferred>=0?preferred:(unread>=0?unread:0)
-    $('home').hidden=true;$('reader').hidden=false
-    saveReaderState(displayArticles[currentArticleIndex]?.articleKey)
-    await renderReader()
-    setTimeout(()=>maybeOfferFamileoAvatar(),420)
-    if(displayArticles.some(a=>!a.photoBounds||!a.authorName)){
-      setTimeout(async()=>{
-        try{
-          await service.ensureCurrentPdf()
-          const keep=currentArticle()?.articleKey
-          currentModel=await service.currentView()
-          displayArticles=orderArticles(currentModel.articles)
-          const idx=displayArticles.findIndex(a=>a.articleKey===keep)
-          if(idx>=0)currentArticleIndex=idx
-        }catch(e){debug(e)}
-      },500)
-    }
+    await enterReaderModel(await service.openMagazineLocalFirst(id),preferredArticleKey,restoring,{offerAvatar:true})
   }catch(e){
     if(restoring)clearReaderState();else alert(e.message)
     debug(e)
   }
 }
+async function openHelpChannel(){
+  try{
+    showActivity('Ouverture du canal Aide & améliorations…')
+    await enterReaderModel(await service.openHelpChannel(),null,false,{offerAvatar:false})
+  }catch(e){alert(e.message);debug(e)}
+}
+$('helpChannelHome').onclick=openHelpChannel
+
 $('back').onclick=async()=>{
   if(!$('contributionPopup').hidden){closeContributionPopup();return}
   if(!$('avatarPopup').hidden){closeAvatarPopup();return}
@@ -492,7 +511,9 @@ function ownContributions(article=currentArticle()){
 }
 function updateReaderPageLabel(){
   const a=currentArticle(),host=$('readerPage');if(!a||!host)return
-  const suffix=slotLong(a.slot),label=`Article ${currentArticleIndex+1}/${displayArticles.length} - Page ${a.page}${suffix?' '+suffix:''}`
+  const suffix=slotLong(a.slot),label=currentModel?.magazine?.source==='help'
+    ? `Aide ${currentArticleIndex+1}/${displayArticles.length}${a.helpTitle?' · '+a.helpTitle:''}`
+    : `Article ${currentArticleIndex+1}/${displayArticles.length} - Page ${a.page}${suffix?' '+suffix:''}`
   host.innerHTML=''
   const span=document.createElement('span');span.className='reader-page-text';span.textContent=label;host.appendChild(span)
   if(ownContributions(a).length){const b=document.createElement('button');b.type='button';b.className='reader-page-more';b.textContent='…';b.title='Mes contributions';b.setAttribute('aria-label','Mes contributions');b.onclick=e=>{e.stopPropagation();openContributionPopup()};host.appendChild(b)}
@@ -2436,6 +2457,108 @@ $('tutorialStop').onclick=stopTutorial
 $('tutorialPrev').onclick=()=>showTutorialStep(tutorialIndex-1)
 $('tutorialNext').onclick=()=>tutorialIndex>=tutorialSteps.length-1?stopTutorial():showTutorialStep(tutorialIndex+1)
 
+/* Help & improvements article editor */
+let adminHelpRender=null,adminHelpRenderTimer=null
+function wrapCanvasText(ctx,text,maxWidth){
+  const out=[]
+  for(const paragraph of String(text||'').split(/\n/)){
+    if(!paragraph){out.push('');continue}
+    const words=paragraph.split(/\s+/),line=[]
+    for(const word of words){
+      const test=[...line,word].join(' ')
+      if(line.length&&ctx.measureText(test).width>maxWidth){out.push(line.join(' '));line.length=0}
+      line.push(word)
+    }
+    out.push(line.join(' '))
+  }
+  return out
+}
+async function drawHelpArticlePreview(){
+  clearTimeout(adminHelpRenderTimer)
+  const input=$('adminHelpPhoto'),file=input.files?.[0],text=$('adminHelpText').value.trim(),title=$('adminHelpTitle').value.trim(),layout=$('adminHelpLayout').value
+  const canvas=$('adminHelpPreview'),ctx=canvas.getContext('2d')
+  const result={fits:false,blob:null,photoBounds:null,textBounds:null}
+  adminHelpRender=result
+  if(!file){ctx.clearRect(0,0,canvas.width,canvas.height);$('adminHelpCapacity').textContent='Choisis une photo 4:3.';$('adminHelpPublish').disabled=true;return result}
+  let bitmap
+  try{bitmap=await createImageBitmap(file)}catch(e){status('adminHelpStatus','Image illisible.',false);$('adminHelpPublish').disabled=true;return result}
+  const W=1200,H=layout==='landscape'?1200:900
+  canvas.width=W;canvas.height=H
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H)
+  const srcRatio=4/3,actual=bitmap.width/bitmap.height
+  let sx=0,sy=0,sw=bitmap.width,sh=bitmap.height
+  if(actual>srcRatio){sw=bitmap.height*srcRatio;sx=(bitmap.width-sw)/2}else if(actual<srcRatio){sh=bitmap.width/srcRatio;sy=(bitmap.height-sh)/2}
+  const photo=layout==='portrait'?{x:36,y:210,w:640,h:480}:{x:120,y:40,w:960,h:720}
+  ctx.drawImage(bitmap,sx,sy,sw,sh,photo.x,photo.y,photo.w,photo.h);bitmap.close?.()
+  const box=layout==='portrait'?{x:720,y:65,w:430,h:770}:{x:80,y:805,w:1040,h:330}
+  ctx.fillStyle='#111'
+  let y=box.y
+  if(title){
+    ctx.font='700 44px system-ui,-apple-system,sans-serif'
+    const titleLines=wrapCanvasText(ctx,title,box.w)
+    for(const line of titleLines){ctx.fillText(line,box.x,y);y+=54}
+    y+=12
+  }
+  ctx.font='32px system-ui,-apple-system,sans-serif'
+  const lines=wrapCanvasText(ctx,text,box.w),lineH=43,maxY=box.y+box.h
+  const fits=Boolean(text)&&y+lines.length*lineH<=maxY
+  for(const line of lines){if(y+lineH>maxY)break;ctx.fillText(line,box.x,y);y+=lineH}
+  if(!fits){
+    ctx.fillStyle='rgba(190,0,0,.10)';ctx.fillRect(box.x-12,box.y-12,box.w+24,box.h+24)
+    $('adminHelpCapacity').textContent='Texte trop long pour ce gabarit.'
+    $('adminHelpCapacity').classList.add('over')
+  }else{
+    $('adminHelpCapacity').textContent=`Texte OK · ${text.length} caractères`
+    $('adminHelpCapacity').classList.remove('over')
+  }
+  result.fits=fits
+  result.photoBounds={x0:photo.x/W,y0:photo.y/H,x1:(photo.x+photo.w)/W,y1:(photo.y+photo.h)/H}
+  result.textBounds={x0:box.x/W,y0:box.y/H,x1:(box.x+box.w)/W,y1:(box.y+box.h)/H}
+  result.blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.90))
+  adminHelpRender=result
+  $('adminHelpPublish').disabled=!fits||!result.blob
+  return result
+}
+function scheduleHelpPreview(){clearTimeout(adminHelpRenderTimer);adminHelpRenderTimer=setTimeout(()=>drawHelpArticlePreview().catch(debug),120)}
+for(const id of ['adminHelpPhoto','adminHelpTitle','adminHelpText','adminHelpLayout'])$(id).addEventListener(id==='adminHelpPhoto'||id==='adminHelpLayout'?'change':'input',scheduleHelpPreview)
+async function refreshHelpAdminList(){
+  const host=$('adminHelpList');host.innerHTML='<div class="subtle">Chargement…</div>'
+  try{
+    const rows=await service.helpArticleAdminRows();host.innerHTML=''
+    if(!rows.length){host.innerHTML='<div class="empty">Aucun article.</div>';return}
+    for(const row of rows){
+      const e=document.createElement('div');e.className='admin-help-row'
+      const info=document.createElement('div');info.className='admin-help-row-info'
+      info.innerHTML=`<strong>${esc(row.title||'Article')}</strong><span>${row.layout==='landscape'?'Paysage':'Portrait'} · ${row.visibility==='visible'?'Visible':'Masqué'}</span>`
+      const toggle=document.createElement('button');toggle.type='button';toggle.className='secondary';toggle.textContent=row.visibility==='visible'?'Masquer':'Restaurer'
+      toggle.onclick=async()=>{toggle.disabled=true;try{await service.adminSetHelpArticleVisibility(row.articleKey,row.visibility!=='visible');await refreshHelpAdminList();await localHome()}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
+      const del=document.createElement('button');del.type='button';del.className='danger';del.textContent='Supprimer'
+      del.onclick=async()=>{if(!confirm('Supprimer définitivement cet article et toutes ses contributions Telegram ?'))return;del.disabled=true;try{await service.adminDeleteHelpArticle(row.articleKey);await refreshHelpAdminList();await localHome();status('adminHelpStatus','Article supprimé définitivement.',true)}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
+      const actions=document.createElement('div');actions.className='admin-help-row-actions';actions.append(toggle,del)
+      e.append(info,actions);host.appendChild(e)
+    }
+  }catch(e){debug(e);host.innerHTML='<div class="empty">Canal indisponible.</div>'}
+}
+$('adminHelpRefresh').onclick=refreshHelpAdminList
+$('adminHelpPublish').onclick=async()=>{
+  const b=$('adminHelpPublish')
+  try{
+    const render=adminHelpRender?.fits?adminHelpRender:await drawHelpArticlePreview()
+    if(!render?.fits||!render.blob)throw new Error('Le texte doit tenir entièrement dans le gabarit.')
+    b.disabled=true;status('adminHelpStatus','Publication dans Telegram…')
+    const file=new File([render.blob],`mamina-aide-${Date.now()}.jpg`,{type:'image/jpeg'})
+    await service.adminCreateHelpArticle(file,{
+      title:$('adminHelpTitle').value,
+      text:$('adminHelpText').value,
+      layout:$('adminHelpLayout').value,
+      photoBounds:render.photoBounds,textBounds:render.textBounds,
+    })
+    $('adminHelpPhoto').value='';$('adminHelpTitle').value='';$('adminHelpText').value='';adminHelpRender=null
+    await drawHelpArticlePreview();await refreshHelpAdminList();await localHome()
+    status('adminHelpStatus','Article publié.',true)
+  }catch(e){debug(e);status('adminHelpStatus','Erreur : '+(e.message||e),false)}
+  finally{b.disabled=!adminHelpRender?.fits}
+}
 /* Settings */
 $('openSettingsHome').onclick=()=>{
   $('settingsView').hidden=false
@@ -2511,6 +2634,7 @@ $('copyLogs').onclick=()=>navigator.clipboard.writeText(formatLogs())
 $('verboseLogs').checked=Number(localStorage.getItem('MAMINA_BETA_MTCUTE_LOG_LEVEL')||2)>=4
 $('verboseLogs').onchange=()=>localStorage.setItem('MAMINA_BETA_MTCUTE_LOG_LEVEL',$('verboseLogs').checked?'4':'2')
 
+$('adminPanel').addEventListener('toggle',()=>{if($('adminPanel').open)refreshHelpAdminList().catch(debug)})
 let adminGroups=[],adminTopics=[],lastAdminErrorText=''
 function rememberAdminError(e,context='Administration'){
   const trace=$('adminTrace')?.textContent||''

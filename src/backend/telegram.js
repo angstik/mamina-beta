@@ -290,7 +290,10 @@ export class TelegramGateway {
   }
 
   async postHelpArticle(peer,topicId,file,meta) {
-    return this.tg.sendMedia(peer,InputMedia.photo(file),{
+    const media=InputMedia.photo(file)
+    const uploaded=await this.tg.uploadMedia(media,{peer})
+    if(!uploaded?.inputMedia)throw new Error('Upload Telegram de l’article terminé sans média exploitable.')
+    return this.tg.sendMedia(peer,uploaded.inputMedia,{
       threadId:topicId,
       caption:withMeta(meta?.title?String(meta.title):'Article MamiNa',meta),
       silent:true,

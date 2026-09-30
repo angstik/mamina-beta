@@ -694,7 +694,7 @@ export class UserMaminaService {
     if(!this.gateway||!this.dialog)throw new Error('Telegram non initialisé.')
     if(!file)throw new Error('Image d’article manquante.')
     const clean=String(text||'').trim();if(!clean)throw new Error('Texte manquant.')
-    if(clean.length>3500)throw new Error('Texte trop long.')
+    if(clean.length>3900)throw new Error('Texte trop long pour un message Telegram.')
     const peer=this.dialog.peer
     let topics=await this.gateway.topics(peer),topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
     if(!topic){const created=await this.gateway.createTopic(peer,HELP_TOPIC);topics=await this.gateway.topics(peer);topic=topics.find(t=>topicIdOf(t)===Number(created.topicId))||{id:created.topicId,title:HELP_TOPIC}}
@@ -702,10 +702,20 @@ export class UserMaminaService {
     const roots=(await this.gateway.topicMessages(peer,tid,{limit:Infinity})).map(TelegramGateway.messageModel).filter(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article')
     const meta={kind:'root',type:'help-article',version:1,magazineId,articleKey,page:roots.length+1,slot:'p',layout:layout==='landscape'?'landscape':'portrait',title:String(title||'').trim().slice(0,160),visibility:'visible',photoBounds,textBounds}
     const root=await this.gateway.postHelpArticle(peer,tid,file,meta)
-    try{await this.gateway.postHelpArticleContent(peer,tid,Number(root.id),articleKey,clean)}
+    let content
+    try{content=await this.gateway.postHelpArticleContent(peer,tid,Number(root.id),articleKey,clean)}
     catch(e){try{await this.gateway.deleteMessagesById(peer,[Number(root.id)])}catch{};throw e}
+    let verified=false
+    for(let attempt=0;attempt<4&&!verified;attempt++){
+      if(attempt)await new Promise(resolve=>setTimeout(resolve,250*attempt))
+      const fresh=(await this.gateway.topicMessages(peer,tid,{limit:Infinity})).map(TelegramGateway.messageModel)
+      const rootSeen=fresh.some(r=>Number(r.id)===Number(root.id)&&r.meta?.kind==='root'&&r.meta?.type==='help-article'&&String(r.meta?.articleKey||'')===articleKey&&r.hasMedia)
+      const contentSeen=fresh.some(r=>Number(r.id)===Number(content?.id)&&r.meta?.kind==='help-content'&&String(r.meta?.articleKey||'')===articleKey)
+      verified=rootSeen&&contentSeen
+    }
+    if(!verified)throw new Error('Publication envoyée mais non confirmée par Telegram.')
     await this.syncHelpTopic(topic)
-    return {articleKey,topicId:tid,rootMessageId:Number(root.id)}
+    return {articleKey,topicId:tid,rootMessageId:Number(root.id),contentMessageId:Number(content?.id||0),verified:true}
   }
 
   async adminSetHelpArticleVisibility(articleKey,visible) {

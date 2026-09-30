@@ -241,3 +241,24 @@ button,input,select{font:inherit}button{cursor:pointer}
 .admin-help-list{display:grid;gap:7px;margin-top:8px}.admin-help-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--bg)}
 .admin-help-row-info{display:flex;flex-direction:column;min-width:0}.admin-help-row-info strong,.admin-help-row-info span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.admin-help-row-info span{font-size:.75rem;opacity:.68}
 .admin-help-row-actions{display:flex;gap:5px}.admin-help-row-actions button{width:auto;margin:0;padding:7px 9px}.admin-help-row-actions .danger{background:#b42318;color:#fff;border-color:#b42318}
+
+/* Help editor beta.3: keep the whole admin composer inside the viewport. */
+.admin-help-channel,
+.admin-help-channel *,
+.admin-help-list,
+.admin-help-row,
+.admin-help-row-info{box-sizing:border-box;min-width:0;max-width:100%}
+.admin-help-channel{overflow-x:hidden}
+.admin-help-channel textarea{
+  resize:vertical;
+  overflow-x:hidden;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+.admin-help-preview{max-width:100%}
+.admin-help-row-actions{min-width:0;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:520px){
+  .admin-help-row{grid-template-columns:1fr}
+  .admin-help-row-actions{justify-content:stretch}
+  .admin-help-row-actions button{flex:1 1 0;min-width:0}
+}

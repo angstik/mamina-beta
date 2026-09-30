@@ -3,7 +3,7 @@ import './page-turn.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.37-beta.2'
+const APP_VERSION='1.1.37-beta.3'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -2459,17 +2459,30 @@ $('tutorialNext').onclick=()=>tutorialIndex>=tutorialSteps.length-1?stopTutorial
 
 /* Help & improvements article editor */
 let adminHelpRender=null,adminHelpRenderTimer=null
+function splitCanvasToken(ctx,token,maxWidth){
+  if(ctx.measureText(token).width<=maxWidth)return[token]
+  const parts=[];let chunk=''
+  for(const ch of Array.from(token)){
+    const next=chunk+ch
+    if(chunk&&ctx.measureText(next).width>maxWidth){parts.push(chunk);chunk=ch}else chunk=next
+  }
+  if(chunk)parts.push(chunk)
+  return parts
+}
 function wrapCanvasText(ctx,text,maxWidth){
   const out=[]
   for(const paragraph of String(text||'').split(/\n/)){
     if(!paragraph){out.push('');continue}
-    const words=paragraph.split(/\s+/),line=[]
-    for(const word of words){
-      const test=[...line,word].join(' ')
-      if(line.length&&ctx.measureText(test).width>maxWidth){out.push(line.join(' '));line.length=0}
-      line.push(word)
+    let line=''
+    for(const rawWord of paragraph.split(/\s+/)){
+      const pieces=splitCanvasToken(ctx,rawWord,maxWidth)
+      for(let p=0;p<pieces.length;p++){
+        const piece=pieces[p],candidate=line?`${line} ${piece}`:piece
+        if(line&&ctx.measureText(candidate).width>maxWidth){out.push(line);line=piece}else line=candidate
+        if(p<pieces.length-1){out.push(line);line=''}
+      }
     }
-    out.push(line.join(' '))
+    out.push(line)
   }
   return out
 }
@@ -2501,17 +2514,24 @@ async function drawHelpArticlePreview(){
   }
   ctx.font='32px system-ui,-apple-system,sans-serif'
   const lines=wrapCanvasText(ctx,text,box.w),lineH=43,maxY=box.y+box.h
-  const fits=Boolean(text)&&y+lines.length*lineH<=maxY
-  for(const line of lines){if(y+lineH>maxY)break;ctx.fillText(line,box.x,y);y+=lineH}
-  if(!fits){
+  const maxLines=Math.max(0,Math.floor((maxY-y)/lineH))
+  const usedLines=text?lines.length:0
+  const fits=Boolean(text)&&usedLines<=maxLines
+  for(const line of lines.slice(0,maxLines)){ctx.fillText(line,box.x,y);y+=lineH}
+  if(!text){
+    $('adminHelpCapacity').textContent=`Saisis le texte de l’article · 0/${maxLines} lignes`
+    $('adminHelpCapacity').classList.remove('over')
+  }else if(!fits){
     ctx.fillStyle='rgba(190,0,0,.10)';ctx.fillRect(box.x-12,box.y-12,box.w+24,box.h+24)
-    $('adminHelpCapacity').textContent='Texte trop long pour ce gabarit.'
+    $('adminHelpCapacity').textContent=`Message trop long · ${usedLines}/${maxLines} lignes`
     $('adminHelpCapacity').classList.add('over')
   }else{
-    $('adminHelpCapacity').textContent=`Texte OK · ${text.length} caractères`
+    $('adminHelpCapacity').textContent=`Texte OK · ${usedLines}/${maxLines} lignes`
     $('adminHelpCapacity').classList.remove('over')
   }
   result.fits=fits
+  result.usedLines=usedLines
+  result.maxLines=maxLines
   result.photoBounds={x0:photo.x/W,y0:photo.y/H,x1:(photo.x+photo.w)/W,y1:(photo.y+photo.h)/H}
   result.textBounds={x0:box.x/W,y0:box.y/H,x1:(box.x+box.w)/W,y1:(box.y+box.h)/H}
   result.blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.90))
@@ -2547,12 +2567,13 @@ $('adminHelpPublish').onclick=async()=>{
     if(!render?.fits||!render.blob)throw new Error('Le texte doit tenir entièrement dans le gabarit.')
     b.disabled=true;status('adminHelpStatus','Publication dans Telegram…')
     const file=new File([render.blob],`mamina-aide-${Date.now()}.jpg`,{type:'image/jpeg'})
-    await service.adminCreateHelpArticle(file,{
+    const published=await service.adminCreateHelpArticle(file,{
       title:$('adminHelpTitle').value,
       text:$('adminHelpText').value,
       layout:$('adminHelpLayout').value,
       photoBounds:render.photoBounds,textBounds:render.textBounds,
     })
+    if(!published?.verified)throw new Error('Telegram n’a pas confirmé la publication de l’article.')
     $('adminHelpPhoto').value='';$('adminHelpTitle').value='';$('adminHelpText').value='';adminHelpRender=null
     await drawHelpArticlePreview();await refreshHelpAdminList();await localHome()
     status('adminHelpStatus','Article publié.',true)

@@ -3,7 +3,7 @@ import './page-turn.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.37-beta.3'
+const APP_VERSION='1.1.37-beta.4'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -14,7 +14,7 @@ let magazines=[],currentModel=null,displayArticles=[],currentArticleIndex=0
 let reactionOrder='asc',articleOrderMode='magazine',pageTurnEnabled=true,appName='MamiNa'
 let pageTurnMode='page',pageTurnAnimating=false
 let pageFlipModulePromise=null,pageFlipSession=null,pageFlipGeneration=0
-let composerArticleKey=null,safetyTimer=null,reconnectTimer=null,connectionClock=null,readTimer=null
+let composerArticleKey=null,composerPurpose='comment',adminHelpDraftMarkup='',safetyTimer=null,reconnectTimer=null,connectionClock=null,readTimer=null
 let telegramState='offline',reconnecting=false,lastConnectedAt=Number(localStorage.getItem('MAMINA_BETA_LAST_CONNECTED_AT')||0)
 let currentColor='#000000',savedRange=null,lastArticleCopy={text:'',at:0}
 let typingState={bold:false,italic:false,underline:false,strikeThrough:false,color:null}
@@ -151,7 +151,8 @@ async function localHome(){
   const helpButton=$('helpChannelHome')
   helpButton.hidden=!help
   if(help){
-    $('helpChannelUnread').textContent=String(help.unreadCount||0)
+    $('helpChannelUnread').textContent=String(help.pageCount||0)
+    helpButton.title=`Aide & améliorations · ${Number(help.pageCount||0)} article(s) · ${Number(help.unreadCount||0)} réaction(s) non lue(s)`
     helpButton.classList.toggle('has-unread',Number(help.unreadCount||0)>0)
   }
   await renderMagazineList()
@@ -2054,7 +2055,8 @@ function openFocusText(a,index){
   $('focusImageStage').hidden=true;$('focusTextStage').hidden=false
   $('focusAuthor').textContent=a.authorName||'Article'
   $('focusArticleDate').textContent=a.articleDateLabel||''
-  $('focusText').textContent=a.bodyText||a.articleText||a.pageText||''
+  if(a.source==='help')$('focusText').innerHTML=renderMarkup(a.bodyText||a.articleText||a.pageText||'')
+  else $('focusText').textContent=a.bodyText||a.articleText||a.pageText||''
   const av=cropImage(articleImg(index),a.avatarBounds)
   if(av){$('focusAuthorAvatar').src=av;$('focusAuthorAvatar').hidden=false}else $('focusAuthorAvatar').hidden=true
   $('focusOverlay').hidden=false
@@ -2459,15 +2461,109 @@ $('tutorialNext').onclick=()=>tutorialIndex>=tutorialSteps.length-1?stopTutorial
 
 /* Help & improvements article editor */
 let adminHelpRender=null,adminHelpRenderTimer=null
-function splitCanvasToken(ctx,token,maxWidth){
-  if(ctx.measureText(token).width<=maxWidth)return[token]
-  const parts=[];let chunk=''
-  for(const ch of Array.from(token)){
-    const next=chunk+ch
-    if(chunk&&ctx.measureText(next).width>maxWidth){parts.push(chunk);chunk=ch}else chunk=next
+
+function openHelpTextComposer(){
+  composerPurpose='help'
+  composerArticleKey=null
+  $('composerText').innerHTML=renderMarkup(adminHelpDraftMarkup)
+  $('composerText').dataset.placeholder='Texte de l’article…'
+  $('composerModal').hidden=false
+  $('formatRow').hidden=false
+  $('colorRow').hidden=true
+  currentColor=defaultEditorColor()
+  typingState={bold:false,italic:false,underline:false,strikeThrough:false,color:currentColor}
+  document.querySelector('.color-swatch').style.background=currentColor
+  const editor=$('composerText')
+  editor.focus({preventScroll:true})
+  placeCaretEnd(editor)
+  try{document.execCommand('styleWithCSS',false,false)}catch{}
+  forceSaveSelection()
+  syncTypingStateFromCaret()
+  updateToolbar()
+  requestAnimationFrame(positionComposer)
+}
+$('adminHelpEditText').onclick=openHelpTextComposer
+
+function helpPlainText(markup=''){
+  const d=document.createElement('div');d.innerHTML=renderMarkup(markup)
+  return (d.textContent||'').replace(/\u200B/g,'').trim()
+}
+function helpRichRuns(markup=''){
+  const root=document.createElement('div');root.innerHTML=renderMarkup(markup)
+  const out=[]
+  const walk=(node,style)=>{
+    if(node.nodeType===3){if(node.nodeValue)out.push({text:node.nodeValue,style});return}
+    if(node.nodeType!==1)return
+    if(node.tagName==='BR'){out.push({break:true});return}
+    const next={...style}
+    if(node.tagName==='STRONG'||node.tagName==='B')next.bold=true
+    if(node.tagName==='EM'||node.tagName==='I')next.italic=true
+    if(node.tagName==='U')next.underline=true
+    if(node.tagName==='S'||node.tagName==='STRIKE')next.strike=true
+    if(node.style?.color)next.color=node.style.color
+    for(const child of node.childNodes)walk(child,next)
   }
-  if(chunk)parts.push(chunk)
-  return parts
+  for(const child of root.childNodes)walk(child,{bold:false,italic:false,underline:false,strike:false,color:'#111'})
+  return out
+}
+function helpCanvasFont(style,size=32){
+  return `${style?.italic?'italic ':''}${style?.bold?'700 ':'400 '}${size}px system-ui,-apple-system,sans-serif`
+}
+function richCanvasLines(ctx,markup,maxWidth,size=32){
+  const lines=[];let line=[],width=0
+  const push=()=>{lines.push(line);line=[];width=0}
+  const append=(text,style)=>{
+    if(!text)return
+    ctx.font=helpCanvasFont(style,size)
+    let w=ctx.measureText(text).width
+    if(width+w<=maxWidth){line.push({text,style,width:w});width+=w;return}
+    if(line.length)push()
+    ctx.font=helpCanvasFont(style,size);w=ctx.measureText(text).width
+    if(w<=maxWidth){line.push({text,style,width:w});width=w;return}
+    let chunk=''
+    for(const ch of Array.from(text)){
+      const next=chunk+ch
+      ctx.font=helpCanvasFont(style,size)
+      if(chunk&&ctx.measureText(next).width>maxWidth){
+        const cw=ctx.measureText(chunk).width;line.push({text:chunk,style,width:cw});push();chunk=ch
+      }else chunk=next
+    }
+    if(chunk){ctx.font=helpCanvasFont(style,size);const cw=ctx.measureText(chunk).width;line.push({text:chunk,style,width:cw});width=cw}
+  }
+  for(const run of helpRichRuns(markup)){
+    if(run.break){push();continue}
+    const bits=String(run.text||'').split(/(\s+)/)
+    for(const bit of bits){
+      if(!bit)continue
+      if(/^\s+$/.test(bit)){
+        if(!line.length)continue
+        ctx.font=helpCanvasFont(run.style,size)
+        const sw=ctx.measureText(' ').width
+        if(width+sw>maxWidth)push()
+        else{line.push({text:' ',style:run.style,width:sw});width+=sw}
+      }else{
+        ctx.font=helpCanvasFont(run.style,size)
+        const w=ctx.measureText(bit).width
+        if(line.length&&width+w>maxWidth)push()
+        append(bit,run.style)
+      }
+    }
+  }
+  if(line.length||!lines.length)push()
+  while(lines.length&&lines[lines.length-1].length===0)lines.pop()
+  return lines
+}
+function drawRichCanvasLine(ctx,line,x,y,size=32){
+  let dx=x
+  for(const seg of line){
+    const s=seg.style||{}
+    ctx.font=helpCanvasFont(s,size);ctx.fillStyle=s.color||'#111'
+    ctx.fillText(seg.text,dx,y)
+    const w=seg.width??ctx.measureText(seg.text).width
+    if(s.underline){ctx.fillRect(dx,y+4,w,1.6)}
+    if(s.strike){ctx.fillRect(dx,y-size*.32,w,1.6)}
+    dx+=w
+  }
 }
 function wrapCanvasText(ctx,text,maxWidth){
   const out=[]
@@ -2475,12 +2571,8 @@ function wrapCanvasText(ctx,text,maxWidth){
     if(!paragraph){out.push('');continue}
     let line=''
     for(const rawWord of paragraph.split(/\s+/)){
-      const pieces=splitCanvasToken(ctx,rawWord,maxWidth)
-      for(let p=0;p<pieces.length;p++){
-        const piece=pieces[p],candidate=line?`${line} ${piece}`:piece
-        if(line&&ctx.measureText(candidate).width>maxWidth){out.push(line);line=piece}else line=candidate
-        if(p<pieces.length-1){out.push(line);line=''}
-      }
+      const candidate=line?`${line} ${rawWord}`:rawWord
+      if(line&&ctx.measureText(candidate).width>maxWidth){out.push(line);line=rawWord}else line=candidate
     }
     out.push(line)
   }
@@ -2488,11 +2580,11 @@ function wrapCanvasText(ctx,text,maxWidth){
 }
 async function drawHelpArticlePreview(){
   clearTimeout(adminHelpRenderTimer)
-  const input=$('adminHelpPhoto'),file=input.files?.[0],text=$('adminHelpText').value.trim(),title=$('adminHelpTitle').value.trim(),layout=$('adminHelpLayout').value
+  const input=$('adminHelpPhoto'),file=input.files?.[0],markup=adminHelpDraftMarkup||$('adminHelpText').value||'',plain=helpPlainText(markup),title=$('adminHelpTitle').value.trim(),layout=$('adminHelpLayout').value
   const canvas=$('adminHelpPreview'),ctx=canvas.getContext('2d')
   const result={fits:false,blob:null,photoBounds:null,textBounds:null}
   adminHelpRender=result
-  if(!file){ctx.clearRect(0,0,canvas.width,canvas.height);$('adminHelpCapacity').textContent='Choisis une photo 4:3.';$('adminHelpPublish').disabled=true;return result}
+  if(!file){ctx.clearRect(0,0,canvas.width,canvas.height);$('adminHelpCapacity').textContent='Choisis une photo 4:3.';$('adminHelpCapacity').classList.remove('over');$('adminHelpPublish').disabled=true;return result}
   let bitmap
   try{bitmap=await createImageBitmap(file)}catch(e){status('adminHelpStatus','Image illisible.',false);$('adminHelpPublish').disabled=true;return result}
   const W=1200,H=layout==='landscape'?1200:900
@@ -2512,13 +2604,13 @@ async function drawHelpArticlePreview(){
     for(const line of titleLines){ctx.fillText(line,box.x,y);y+=54}
     y+=12
   }
-  ctx.font='32px system-ui,-apple-system,sans-serif'
-  const lines=wrapCanvasText(ctx,text,box.w),lineH=43,maxY=box.y+box.h
+  const bodySize=32,lineH=43,maxY=box.y+box.h
+  const richLines=plain?richCanvasLines(ctx,markup,box.w,bodySize):[]
   const maxLines=Math.max(0,Math.floor((maxY-y)/lineH))
-  const usedLines=text?lines.length:0
-  const fits=Boolean(text)&&usedLines<=maxLines
-  for(const line of lines.slice(0,maxLines)){ctx.fillText(line,box.x,y);y+=lineH}
-  if(!text){
+  const usedLines=richLines.length
+  const fits=Boolean(plain)&&usedLines<=maxLines
+  for(const line of richLines.slice(0,maxLines)){drawRichCanvasLine(ctx,line,box.x,y,bodySize);y+=lineH}
+  if(!plain){
     $('adminHelpCapacity').textContent=`Saisis le texte de l’article · 0/${maxLines} lignes`
     $('adminHelpCapacity').classList.remove('over')
   }else if(!fits){
@@ -2532,6 +2624,7 @@ async function drawHelpArticlePreview(){
   result.fits=fits
   result.usedLines=usedLines
   result.maxLines=maxLines
+  result.markup=markup
   result.photoBounds={x0:photo.x/W,y0:photo.y/H,x1:(photo.x+photo.w)/W,y1:(photo.y+photo.h)/H}
   result.textBounds={x0:box.x/W,y0:box.y/H,x1:(box.x+box.w)/W,y1:(box.y+box.h)/H}
   result.blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.90))
@@ -2540,24 +2633,27 @@ async function drawHelpArticlePreview(){
   return result
 }
 function scheduleHelpPreview(){clearTimeout(adminHelpRenderTimer);adminHelpRenderTimer=setTimeout(()=>drawHelpArticlePreview().catch(debug),120)}
-for(const id of ['adminHelpPhoto','adminHelpTitle','adminHelpText','adminHelpLayout'])$(id).addEventListener(id==='adminHelpPhoto'||id==='adminHelpLayout'?'change':'input',scheduleHelpPreview)
+for(const id of ['adminHelpPhoto','adminHelpTitle','adminHelpLayout'])$(id).addEventListener(id==='adminHelpPhoto'||id==='adminHelpLayout'?'change':'input',scheduleHelpPreview)
+
+function renderHelpAdminRows(rows=[]){
+  const host=$('adminHelpList');host.innerHTML=''
+  if(!rows.length){host.innerHTML='<div class="empty">Aucun article.</div>';return}
+  for(const row of rows){
+    const e=document.createElement('div');e.className='admin-help-row'
+    const info=document.createElement('div');info.className='admin-help-row-info'
+    info.innerHTML=`<strong>${esc(row.title||'Article')}</strong><span>${row.layout==='landscape'?'Paysage':'Portrait'} · ${row.visibility==='visible'?'Visible':'Masqué'}</span>`
+    const toggle=document.createElement('button');toggle.type='button';toggle.className='secondary';toggle.textContent=row.visibility==='visible'?'Masquer':'Restaurer'
+    toggle.onclick=async()=>{toggle.disabled=true;try{renderHelpAdminRows(await service.adminSetHelpArticleVisibility(row.articleKey,row.visibility!=='visible'));await localHome()}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
+    const del=document.createElement('button');del.type='button';del.className='danger';del.textContent='Supprimer'
+    del.onclick=async()=>{if(!confirm('Supprimer définitivement cet article et toutes ses contributions Telegram ?'))return;del.disabled=true;try{renderHelpAdminRows(await service.adminDeleteHelpArticle(row.articleKey));await localHome();status('adminHelpStatus','Article supprimé définitivement.',true)}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
+    const actions=document.createElement('div');actions.className='admin-help-row-actions';actions.append(toggle,del)
+    e.append(info,actions);host.appendChild(e)
+  }
+}
 async function refreshHelpAdminList(){
   const host=$('adminHelpList');host.innerHTML='<div class="subtle">Chargement…</div>'
-  try{
-    const rows=await service.helpArticleAdminRows();host.innerHTML=''
-    if(!rows.length){host.innerHTML='<div class="empty">Aucun article.</div>';return}
-    for(const row of rows){
-      const e=document.createElement('div');e.className='admin-help-row'
-      const info=document.createElement('div');info.className='admin-help-row-info'
-      info.innerHTML=`<strong>${esc(row.title||'Article')}</strong><span>${row.layout==='landscape'?'Paysage':'Portrait'} · ${row.visibility==='visible'?'Visible':'Masqué'}</span>`
-      const toggle=document.createElement('button');toggle.type='button';toggle.className='secondary';toggle.textContent=row.visibility==='visible'?'Masquer':'Restaurer'
-      toggle.onclick=async()=>{toggle.disabled=true;try{await service.adminSetHelpArticleVisibility(row.articleKey,row.visibility!=='visible');await refreshHelpAdminList();await localHome()}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
-      const del=document.createElement('button');del.type='button';del.className='danger';del.textContent='Supprimer'
-      del.onclick=async()=>{if(!confirm('Supprimer définitivement cet article et toutes ses contributions Telegram ?'))return;del.disabled=true;try{await service.adminDeleteHelpArticle(row.articleKey);await refreshHelpAdminList();await localHome();status('adminHelpStatus','Article supprimé définitivement.',true)}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
-      const actions=document.createElement('div');actions.className='admin-help-row-actions';actions.append(toggle,del)
-      e.append(info,actions);host.appendChild(e)
-    }
-  }catch(e){debug(e);host.innerHTML='<div class="empty">Canal indisponible.</div>'}
+  try{renderHelpAdminRows(await service.helpArticleAdminRows())}
+  catch(e){debug(e);host.innerHTML='<div class="empty">Canal indisponible.</div>'}
 }
 $('adminHelpRefresh').onclick=refreshHelpAdminList
 $('adminHelpPublish').onclick=async()=>{
@@ -2569,14 +2665,16 @@ $('adminHelpPublish').onclick=async()=>{
     const file=new File([render.blob],`mamina-aide-${Date.now()}.jpg`,{type:'image/jpeg'})
     const published=await service.adminCreateHelpArticle(file,{
       title:$('adminHelpTitle').value,
-      text:$('adminHelpText').value,
+      text:render.markup||adminHelpDraftMarkup,
       layout:$('adminHelpLayout').value,
       photoBounds:render.photoBounds,textBounds:render.textBounds,
     })
-    if(!published?.verified)throw new Error('Telegram n’a pas confirmé la publication de l’article.')
-    $('adminHelpPhoto').value='';$('adminHelpTitle').value='';$('adminHelpText').value='';adminHelpRender=null
-    await drawHelpArticlePreview();await refreshHelpAdminList();await localHome()
-    status('adminHelpStatus','Article publié.',true)
+    if(!published?.verified||!published?.indexed)throw new Error('Telegram a reçu le message, mais l’article n’est pas encore indexé par MamiNa.')
+    $('adminHelpPhoto').value='';$('adminHelpTitle').value='';$('adminHelpText').value='';adminHelpDraftMarkup='';$('adminHelpTextPreview').innerHTML='<span class="subtle">Aucun texte saisi.</span>';adminHelpRender=null
+    await drawHelpArticlePreview()
+    renderHelpAdminRows(published.adminRows||await service.helpArticleAdminRows())
+    await localHome()
+    status('adminHelpStatus','Article publié et indexé.',true)
   }catch(e){debug(e);status('adminHelpStatus','Erreur : '+(e.message||e),false)}
   finally{b.disabled=!adminHelpRender?.fits}
 }
@@ -3100,6 +3198,7 @@ document.addEventListener('selectionchange',()=>{
 })
 
 function openComposer(k,{focus=true}={}){
+  composerPurpose='comment'
   composerArticleKey=k
   const article=displayArticles.find(x=>x.articleKey===k)
   const pending=article?.comments?.find(c=>c.pending)
@@ -3135,8 +3234,10 @@ function closeComposer(){
   $('composerModal').hidden=true
   $('reader').classList.remove('composer-open')
   $('reader').style.height=''
-  $('readerDate').textContent=fmtShort(currentModel.magazine.date)
+  if(currentModel?.magazine)$('readerDate').textContent=fmtShort(currentModel.magazine.date)
+  $('composerText').dataset.placeholder='Écrire un message…'
   composerArticleKey=null
+  composerPurpose='comment'
   savedRange=null
   toolbarGesture=false
   typingState={bold:false,italic:false,underline:false,strikeThrough:false,color:null}
@@ -3275,7 +3376,7 @@ function positionComposer(){
   const vv=visualViewport,sheet=$('composerSheet')
   const top=vv?Math.max(vv.offsetTop,vv.offsetTop+vv.height-sheet.offsetHeight):innerHeight-sheet.offsetHeight
   sheet.style.top=`${Math.round(top)}px`;sheet.style.bottom='auto'
-  $('reader').style.height=`${Math.round(top)}px`
+  if(composerPurpose==='comment')$('reader').style.height=`${Math.round(top)}px`
 }
 visualViewport?.addEventListener('resize',positionComposer)
 visualViewport?.addEventListener('scroll',positionComposer)
@@ -3324,6 +3425,14 @@ $('sendText').onclick=async()=>{
   const b=$('sendText')
   try{
     const t=editorMarkup();if(!t)throw new Error('Message vide.')
+    if(composerPurpose==='help'){
+      adminHelpDraftMarkup=t
+      $('adminHelpText').value=t
+      $('adminHelpTextPreview').innerHTML=renderMarkup(t)
+      closeComposer()
+      scheduleHelpPreview()
+      return
+    }
     b.disabled=true
     showActivity(telegramState==='connected'?'Envoi du message…':'Message conservé localement…')
     // Keep keyboard/editor in place until storage/network work is finished.

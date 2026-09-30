@@ -262,3 +262,14 @@ button,input,select{font:inherit}button{cursor:pointer}
   .admin-help-row-actions{justify-content:stretch}
   .admin-help-row-actions button{flex:1 1 0;min-width:0}
 }
+
+/* Help authoring beta.4 */
+html,body{max-width:100%;overflow-x:hidden}
+.settings-view,.settings-body,.admin-panel,.admin-help-channel{min-width:0;max-width:100%;overflow-x:hidden}
+.settings-body input,.settings-body select,.rich-editor{font-size:16px}
+.admin-help-text-preview{
+  box-sizing:border-box;width:100%;min-height:52px;max-height:150px;overflow:auto;
+  margin:7px 0;padding:9px;border:1px solid var(--line);border-radius:9px;
+  background:var(--bg);white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;
+}
+#adminHelpEditText{width:100%}

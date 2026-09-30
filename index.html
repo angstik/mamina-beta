@@ -12,7 +12,7 @@
   <title>MamiNa β</title>
 </head>
 <body>
-<div id="betaBuildBadge" style="position:fixed;z-index:5000;top:6px;left:50%;transform:translateX(-50%);padding:5px 10px;border-radius:999px;background:#f0a020;color:#201600;font:700 12px system-ui;box-shadow:0 2px 8px #0003;pointer-events:none">MamiNa β · 1.1.37-beta.3</div>
+<div id="betaBuildBadge" style="position:fixed;z-index:5000;top:6px;left:50%;transform:translateX(-50%);padding:5px 10px;border-radius:999px;background:#f0a020;color:#201600;font:700 12px system-ui;box-shadow:0 2px 8px #0003;pointer-events:none">MamiNa β · 1.1.37-beta.4</div>
 
 <div id="splash" class="splash" hidden>
   <img class="splash-brand-image" src="/mamina/mamina-v08-512.png?v=101" alt="MamiNa">
@@ -291,8 +291,10 @@
         <input id="adminHelpPhoto" type="file" accept="image/*">
         <label for="adminHelpTitle">Titre (facultatif)</label>
         <input id="adminHelpTitle" maxlength="160" placeholder="Titre de l’article">
-        <label for="adminHelpText">Texte</label>
-        <textarea id="adminHelpText" rows="7" maxlength="3500" placeholder="Texte de l’article"></textarea>
+        <label>Texte</label>
+        <input id="adminHelpText" type="hidden" value="">
+        <button id="adminHelpEditText" type="button" class="secondary">✍️ Saisir / modifier le texte</button>
+        <div id="adminHelpTextPreview" class="admin-help-text-preview"><span class="subtle">Aucun texte saisi.</span></div>
         <div class="admin-help-capacity"><span id="adminHelpCapacity">Choisis une photo.</span></div>
         <canvas id="adminHelpPreview" class="admin-help-preview" width="1200" height="900"></canvas>
         <button id="adminHelpPublish" type="button" disabled>Publier l’article</button>

@@ -641,7 +641,11 @@ export class UserMaminaService {
       if(!rawMessage?.media)continue
       const assetKey=`article:${articleKey}`
       if(!await getAsset(assetKey)){
-        try{await putAsset(assetKey,await this.gateway.downloadMessageMedia(rawMessage))}catch(e){warn('help','Image d’article non téléchargée',{articleKey,message:e?.message||String(e)})}
+        try{
+          const bytes=await this.gateway.downloadMessageMedia(rawMessage)
+          const blob=bytes instanceof Blob?bytes:new Blob([bytes],{type:'image/jpeg'})
+          await putAsset(assetKey,blob)
+        }catch(e){warn('help','Image d’article non téléchargée',{articleKey,message:e?.message||String(e)})}
       }
       const layout=String(root.meta.layout||'portrait')
       articles.push({
@@ -680,14 +684,19 @@ export class UserMaminaService {
     const topics=await this.gateway.topics(this.dialog.peer)
     const topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
     if(!topic)return[]
+    await this.syncHelpTopic(topic)
     const raw=await this.gateway.topicMessages(this.dialog.peer,topicIdOf(topic),{limit:Infinity})
     const models=raw.map(TelegramGateway.messageModel)
     const state=new Map()
     for(const row of models.filter(r=>r.meta?.kind==='help-state'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id))state.set(String(row.meta.articleKey),String(row.meta.visibility||'visible'))
-    return models.filter(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id).map(r=>({
+    const remote=models.filter(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id).map(r=>({
       articleKey:String(r.meta.articleKey),title:String(r.meta.title||'Article'),layout:String(r.meta.layout||'portrait'),
       visibility:state.get(String(r.meta.articleKey))||String(r.meta.visibility||'visible'),date:r.date||'',rootMessageId:Number(r.id)
     }))
+    if(remote.length)return remote
+    const magazineId=helpMagazineId(this.dialog.peer)
+    const local=await listArticles(magazineId)
+    return local.map(a=>({articleKey:a.articleKey,title:a.helpTitle||'Article',layout:a.helpLayout||'portrait',visibility:'visible',date:a.dateIso||'',rootMessageId:Number(a.helpRootMessageId||0)}))
   }
 
   async adminCreateHelpArticle(file,{title='',text='',layout='portrait',photoBounds=null,textBounds=null}={}) {
@@ -715,7 +724,12 @@ export class UserMaminaService {
     }
     if(!verified)throw new Error('Publication envoyée mais non confirmée par Telegram.')
     await this.syncHelpTopic(topic)
-    return {articleKey,topicId:tid,rootMessageId:Number(root.id),contentMessageId:Number(content?.id||0),verified:true}
+    const indexed=(await listArticles(magazineId)).some(a=>a.articleKey===articleKey)
+    if(!indexed)throw new Error('Article confirmé par Telegram mais absent de l’index local MamiNa.')
+    const asset=await getAsset(`article:${articleKey}`)
+    if(!asset)throw new Error('Article indexé mais image locale absente.')
+    const adminRows=await this.helpArticleAdminRows()
+    return {articleKey,topicId:tid,rootMessageId:Number(root.id),contentMessageId:Number(content?.id||0),verified:true,indexed:true,adminRows}
   }
 
   async adminSetHelpArticleVisibility(articleKey,visible) {
@@ -1434,7 +1448,11 @@ export class UserMaminaService {
   async getArticleImageInfo(articleKey) {
     if(!this.current) throw new Error('Aucune revue ouverte.')
     const assetKey=`article:${articleKey}`
-    const cached=await getAsset(assetKey)
+    let cached=await getAsset(assetKey)
+    if(cached&&this.current.magazine?.source==='help'&&!(cached instanceof Blob)){
+      cached=new Blob([cached],{type:'image/jpeg'})
+      await putAsset(assetKey,cached)
+    }
     if(cached) return {blob:cached,source:'local'}
 
     const task=async()=>{
@@ -1467,8 +1485,9 @@ export class UserMaminaService {
 
     if(this.current.magazine?.source==='help'){
       const article=this.current.articles.find(a=>a.articleKey===articleKey)
-      const source=await getAsset(`article:${articleKey}`)
+      let source=await getAsset(`article:${articleKey}`)
       if(!article||!source)throw new Error('Photo de l’article d’aide indisponible.')
+      if(!(source instanceof Blob)){source=new Blob([source],{type:'image/jpeg'});await putAsset(`article:${articleKey}`,source)}
       const bounds=article.photoBounds||{x0:0,y0:0,x1:1,y1:1}
       const bitmap=await createImageBitmap(source)
       try{

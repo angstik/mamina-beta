@@ -1,8 +1,9 @@
 import './styles.css'
+import './page-turn.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.30-beta.8'
+const APP_VERSION='1.1.37-beta.1'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -10,9 +11,8 @@ const $=id=>document.getElementById(id)
 const service=new UserMaminaService()
 
 let magazines=[],currentModel=null,displayArticles=[],currentArticleIndex=0
-let reactionOrder='asc',articleOrderMode='magazine',appName='MamiNa'
-const IS_BETA_PAGE_TURN=Boolean(window.MAMINA_BETA_PAGE_TURN)
-let pageTurnMode=IS_BETA_PAGE_TURN?'page':'slide',pageTurnAnimating=false
+let reactionOrder='asc',articleOrderMode='magazine',pageTurnEnabled=true,appName='MamiNa'
+let pageTurnMode='page',pageTurnAnimating=false
 let pageFlipModulePromise=null,pageFlipSession=null,pageFlipGeneration=0
 let composerArticleKey=null,safetyTimer=null,reconnectTimer=null,connectionClock=null,readTimer=null
 let telegramState='offline',reconnecting=false,lastConnectedAt=Number(localStorage.getItem('MAMINA_BETA_LAST_CONNECTED_AT')||0)
@@ -32,7 +32,7 @@ const avatarChoiceUrls=[]
 const focusZoomStates=new Map()
 let focusArticleKey=null,focusPhotoUrl=null
 const SOUND_ENABLED_KEY='MAMINA_BETA_SOUND_ENABLED'
-const SOUND_CACHE_NAME='mamina-sounds-v1'
+const SOUND_CACHE_NAME='mamina-beta-sounds-v1'
 const SOUND_CACHE_META_KEY='MAMINA_BETA_SOUND_CACHE_META'
 const SOUND_CACHE_TTL=7*24*60*60*1000
 const FREESOUND_API_KEY_LOCAL='MAMINA_BETA_FREESOUND_API_KEY'
@@ -48,7 +48,7 @@ const preparedSoundUrls=new Map(),preparingSoundUrls=new Map()
 
 const status=(id,text,ok=null)=>{const e=$(id);if(!e)return;e.textContent=text;e.className='status'+(ok===true?' ok':ok===false?' error':'')}
 const debug=e=>logError('ui',e?.stack||e?.message||String(e),e)
-if(IS_BETA_PAGE_TURN)import('./beta-page-turn.css').catch(debug)
+
 const esc=s=>String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;')
 const objectUrl=(blob,bucket)=>{const u=URL.createObjectURL(blob);bucket.push(u);return u}
 const freeUrls=b=>{while(b.length)URL.revokeObjectURL(b.pop())}
@@ -91,10 +91,13 @@ async function loadSettings(){
   const c=await service.getSettings()
   reactionOrder=c.reactionOrder
   articleOrderMode=c.articleOrderMode
+  pageTurnEnabled=c.pageTurnEnabled!==false
+  pageTurnMode=pageTurnEnabled&&!matchMedia('(prefers-reduced-motion: reduce)').matches?'page':'slide'
   applyTheme(c.theme)
   setAppName(c.appTitle)
   $('reactionOrder').value=reactionOrder
   $('themeSelect').value=c.theme
+  $('pageTurnEnabled').checked=pageTurnEnabled
   $('adminAppTitle').value=c.appTitle
   $('adminStoragePassword').checked=Boolean(c.storagePassword)
   soundCatalog=Array.isArray(c.sounds)?c.sounds:[]
@@ -144,13 +147,6 @@ async function refreshPending(){
 async function localHome(){
   await loadSettings()
   magazines=await service.magazineSummaries()
-  const help=await service.helpSummary()
-  const helpButton=$('helpChannelHome')
-  helpButton.hidden=!help
-  if(help){
-    $('helpChannelUnread').textContent=String(help.unreadCount||0)
-    helpButton.classList.toggle('has-unread',Number(help.unreadCount||0)>0)
-  }
   await renderMagazineList()
   await refreshPending()
 }
@@ -172,7 +168,7 @@ function showOfflineLocalState(){
   status('setupStatus','Hors ligne — aucune revue locale disponible. Reconnecte le réseau pour initialiser MamiNa.')
 }
 function isMaminaPasswordError(error){
-  return error?.code==='MAMINA_BETA_PASSWORD_INVALID'||/mot de passe mamina incorrect/i.test(String(error?.message||''))
+  return error?.code==='MAMINA_PASSWORD_INVALID'||/mot de passe mamina incorrect/i.test(String(error?.message||''))
 }
 async function connectTelegramAfterUnlock(){
   if(!navigator.onLine){
@@ -429,48 +425,36 @@ function saveReaderState(articleKey=currentArticle()?.articleKey){
 }
 function clearReaderState(){localStorage.removeItem(READER_STATE_KEY)}
 
-async function enterReaderModel(model,preferredArticleKey=null,restoring=false,{offerAvatar=true}={}){
-  currentModel=model
-  await loadSettings()
-  displayArticles=orderArticles(currentModel.articles)
-  if(!displayArticles.length)throw new Error('Aucun article disponible.')
-  const preferred=preferredArticleKey?displayArticles.findIndex(a=>a.articleKey===preferredArticleKey):-1
-  const unread=displayArticles.findIndex(a=>a.unreadCount>0)
-  currentArticleIndex=preferred>=0?preferred:(unread>=0?unread:0)
-  $('home').hidden=true;$('reader').hidden=false
-  saveReaderState(displayArticles[currentArticleIndex]?.articleKey)
-  await renderReader()
-  if(offerAvatar)setTimeout(()=>maybeOfferFamileoAvatar(),420)
-  if(currentModel.magazine?.source!=='help'&&displayArticles.some(a=>!a.photoBounds||!a.authorName)){
-    setTimeout(async()=>{
-      try{
-        await service.ensureCurrentPdf()
-        const keep=currentArticle()?.articleKey
-        currentModel=await service.currentView()
-        displayArticles=orderArticles(currentModel.articles)
-        const idx=displayArticles.findIndex(a=>a.articleKey===keep)
-        if(idx>=0)currentArticleIndex=idx
-      }catch(e){debug(e)}
-    },500)
-  }
-}
 async function openMagazine(id,preferredArticleKey=null,restoring=false){
   try{
     showActivity(restoring?'Restauration de la revue…':'Ouverture locale de la revue…')
-    await enterReaderModel(await service.openMagazineLocalFirst(id),preferredArticleKey,restoring,{offerAvatar:true})
+    currentModel=await service.openMagazineLocalFirst(id)
+    await loadSettings()
+    displayArticles=orderArticles(currentModel.articles)
+    const preferred=preferredArticleKey?displayArticles.findIndex(a=>a.articleKey===preferredArticleKey):-1
+    const unread=displayArticles.findIndex(a=>a.unreadCount>0)
+    currentArticleIndex=preferred>=0?preferred:(unread>=0?unread:0)
+    $('home').hidden=true;$('reader').hidden=false
+    saveReaderState(displayArticles[currentArticleIndex]?.articleKey)
+    await renderReader()
+    setTimeout(()=>maybeOfferFamileoAvatar(),420)
+    if(displayArticles.some(a=>!a.photoBounds||!a.authorName)){
+      setTimeout(async()=>{
+        try{
+          await service.ensureCurrentPdf()
+          const keep=currentArticle()?.articleKey
+          currentModel=await service.currentView()
+          displayArticles=orderArticles(currentModel.articles)
+          const idx=displayArticles.findIndex(a=>a.articleKey===keep)
+          if(idx>=0)currentArticleIndex=idx
+        }catch(e){debug(e)}
+      },500)
+    }
   }catch(e){
     if(restoring)clearReaderState();else alert(e.message)
     debug(e)
   }
 }
-async function openHelpChannel(){
-  try{
-    showActivity('Ouverture du canal Aide & améliorations…')
-    await enterReaderModel(await service.openHelpChannel(),null,false,{offerAvatar:false})
-  }catch(e){alert(e.message);debug(e)}
-}
-$('helpChannelHome').onclick=openHelpChannel
-
 $('back').onclick=async()=>{
   if(!$('contributionPopup').hidden){closeContributionPopup();return}
   if(!$('avatarPopup').hidden){closeAvatarPopup();return}
@@ -508,9 +492,7 @@ function ownContributions(article=currentArticle()){
 }
 function updateReaderPageLabel(){
   const a=currentArticle(),host=$('readerPage');if(!a||!host)return
-  const suffix=slotLong(a.slot),label=currentModel?.magazine?.source==='help'
-    ? `Aide ${currentArticleIndex+1}/${displayArticles.length}${a.helpTitle?' · '+a.helpTitle:''}`
-    : `Article ${currentArticleIndex+1}/${displayArticles.length} - Page ${a.page}${suffix?' '+suffix:''}`
+  const suffix=slotLong(a.slot),label=`Article ${currentArticleIndex+1}/${displayArticles.length} - Page ${a.page}${suffix?' '+suffix:''}`
   host.innerHTML=''
   const span=document.createElement('span');span.className='reader-page-text';span.textContent=label;host.appendChild(span)
   if(ownContributions(a).length){const b=document.createElement('button');b.type='button';b.className='reader-page-more';b.textContent='…';b.title='Mes contributions';b.setAttribute('aria-label','Mes contributions');b.onclick=e=>{e.stopPropagation();openContributionPopup()};host.appendChild(b)}
@@ -568,28 +550,71 @@ function closeAvatarPopup(){freeUrls(avatarChoiceUrls);$('avatarPopup').hidden=t
 $('avatarPopupClose').onclick=closeAvatarPopup
 $('avatarPopup').addEventListener('click',e=>{if(e.target===$('avatarPopup'))closeAvatarPopup()})
 function waitForImage(img,timeout=3500){return new Promise(resolve=>{if(img?.complete&&img.naturalWidth)return resolve(img);let done=false;const end=()=>{if(done)return;done=true;clearTimeout(timer);resolve(img?.naturalWidth?img:null)};const timer=setTimeout(end,timeout);img?.addEventListener('load',end,{once:true});img?.addEventListener('error',end,{once:true})})}
-async function fillAvatarChoiceImage(button,article,index){
-  try{await loadVisual(index);const img=await waitForImage(articleImg(index));if(!img||$('avatarPopup').hidden)return;const url=cropImage(img,article.avatarBounds);if(!url)return;const placeholder=button.querySelector('.avatar-placeholder');if(placeholder){const pic=document.createElement('img');pic.alt=`Avatar ${article.authorName||''}`;pic.src=url;placeholder.replaceWith(pic);avatarChoiceUrls.push(url)}}catch(e){debug(e)}
-}
-async function maybeOfferFamileoAvatar(){
-  if(!currentModel||!['connected','updating'].includes(service.connectionState())||!$('avatarPopup').hidden)return
+async function fillAvatarChoiceImage(button,article){
   try{
-    const state=await service.avatarAssociationState();if(state.own)return
-    const assigned=new Set((state.assignedNames||[]).map(x=>String(x).trim().toLocaleLowerCase('fr'))),seen=new Set(),choices=[]
-    for(let i=0;i<displayArticles.length;i++){
-      const a=displayArticles[i],name=String(a.authorName||'').trim(),key=name.toLocaleLowerCase('fr')
+    const result=await service.getArticleImageInfo(article.articleKey)
+    if($('avatarPopup').hidden)return
+    const sourceUrl=URL.createObjectURL(result.blob);avatarChoiceUrls.push(sourceUrl)
+    const source=new Image();source.src=sourceUrl
+    const img=await waitForImage(source)
+    if(!img||$('avatarPopup').hidden)return
+    const url=cropImage(img,article.avatarBounds);if(!url)return
+    const placeholder=button.querySelector('.avatar-placeholder')
+    if(placeholder){const pic=document.createElement('img');pic.alt=`Avatar ${article.authorName||''}`;pic.src=url;placeholder.replaceWith(pic)}
+  }catch(e){debug(e)}
+}
+async function showFamileoAvatarChooser({force=false,model=currentModel,articles=displayArticles}={}){
+  if(!model||!articles?.length||!['connected','updating'].includes(service.connectionState())||!$('avatarPopup').hidden)return false
+  try{
+    const state=await service.avatarAssociationState()
+    if(state.own&&!force)return false
+    const assigned=new Set(
+      Object.values(state.profiles||{})
+        .filter(x=>Number(x?.telegramUserId)!==Number(state.userId))
+        .map(x=>String(x?.famileoName||'').trim().toLocaleLowerCase('fr'))
+        .filter(Boolean)
+    )
+    const seen=new Set(),choices=[]
+    for(const a of articles){
+      const name=String(a.authorName||'').trim(),key=name.toLocaleLowerCase('fr')
       if(!name||!a.avatarBounds||seen.has(key)||assigned.has(key))continue
-      seen.add(key);choices.push({name,article:a,index:i})
+      seen.add(key);choices.push({name,article:a})
     }
-    if(!choices.length)return
+    if(!choices.length)return false
+    $('avatarPopupTitle').textContent=force?'Choix de l’avatar Famileo':'Ton avatar dans les magazines'
     const host=$('avatarPopupGrid');host.innerHTML='';freeUrls(avatarChoiceUrls)
+    const ownName=String(state.own?.famileoName||'').trim().toLocaleLowerCase('fr')
     for(const choice of choices){
-      const b=document.createElement('button');b.type='button';b.className='avatar-choice';b.innerHTML=`<div class="avatar-placeholder">${esc(choice.name.slice(0,1).toUpperCase())}</div><span>${esc(choice.name)}</span>`
-      b.onclick=async()=>{for(const x of host.querySelectorAll('button'))x.disabled=true;status('avatarPopupStatus','Association…');try{await service.assignFamileoAvatar(choice.name);status('avatarPopupStatus','Avatar associé.',true);setTimeout(closeAvatarPopup,280)}catch(err){debug(err);status('avatarPopupStatus','Erreur : '+(err.message||err),false);for(const x of host.querySelectorAll('button'))x.disabled=false}}
-      host.appendChild(b);fillAvatarChoiceImage(b,choice.article,choice.index)
+      const b=document.createElement('button');b.type='button';b.className='avatar-choice'
+      if(choice.name.toLocaleLowerCase('fr')===ownName)b.classList.add('selected')
+      b.innerHTML=`<div class="avatar-placeholder">${esc(choice.name.slice(0,1).toUpperCase())}</div><span>${esc(choice.name)}</span>`
+      b.onclick=async()=>{
+        for(const x of host.querySelectorAll('button'))x.disabled=true
+        status('avatarPopupStatus','Association…')
+        try{await service.assignFamileoAvatar(choice.name);status('avatarPopupStatus','Avatar associé.',true);setTimeout(closeAvatarPopup,280)}
+        catch(err){debug(err);status('avatarPopupStatus','Erreur : '+(err.message||err),false);for(const x of host.querySelectorAll('button'))x.disabled=false}
+      }
+      host.appendChild(b);fillAvatarChoiceImage(b,choice.article)
     }
     $('avatarPopup').hidden=false
-  }catch(e){debug(e)}
+    return true
+  }catch(e){debug(e);return false}
+}
+async function maybeOfferFamileoAvatar(){return showFamileoAvatarChooser({force:false})}
+async function chooseAvatarFromSettings(){
+  try{
+    status('settingsActionStatus','Préparation des avatars…')
+    if(!service.hasGateway()||!service.hasDialog()||!['connected','updating'].includes(service.connectionState()))throw new Error('Connexion Telegram requise.')
+    let model=currentModel,articles=displayArticles
+    if(!model){
+      const first=magazines[0]
+      if(!first)throw new Error('Aucune revue locale disponible pour proposer les avatars.')
+      model=await service.openMagazineLocalFirst(first.magazineId)
+      articles=orderArticles(model.articles)
+    }
+    const opened=await showFamileoAvatarChooser({force:true,model,articles})
+    status('settingsActionStatus',opened?'Choisis ton profil Famileo.':'Aucun avatar Famileo disponible dans les revues locales.',opened?true:false)
+  }catch(e){debug(e);status('settingsActionStatus','Erreur : '+(e.message||e),false)}
 }
 async function rebuild(key){
   displayArticles=orderArticles(currentModel.articles)
@@ -1266,6 +1291,7 @@ async function preparePageFlipForCurrent(){
   pageFlipSession=session
   currentVisual.classList.add('pageflip-active')
   currentPage?.classList.add('pageflip-active-page')
+  currentVisual._pz?.apply?.()
 
   // The finger position AT RELEASE decides the outcome. Only the farthest
   // quarter commits the turn; otherwise the same curl returns. Velocity is irrelevant.
@@ -1310,14 +1336,24 @@ async function preparePageFlipForCurrent(){
     const dx=e.clientX-p.startX
     if(Math.abs(dx)<8)return
 
-    const wantsPrev=dx>0
-    const impossible=(wantsPrev&&session.current<=0)||(!wantsPrev&&session.current>=displayArticles.length-1)
     const releaseX=(e.clientX-p.left)/p.width
-    // Commit only when the finger is released inside the farthest quarter.
-    const crossedFarQuarter=!impossible&&(dx<0?releaseX<=.25:releaseX>=.75)
     const controller=session.controller
     const calc=controller?.getCalculation?.()
     const animate=controller?.animateFlippingTo
+    const foldDirection=calc?.getDirection?.()
+    // flipbook-core 3.2.1 keeps FlipDirection internal: FORWARD=0, BACK=1.
+    // The calculation object exposes that value, but the package root does not
+    // export the enum itself.
+    const turnsForward=foldDirection===0
+    const turnsBack=foldDirection===1
+    const impossible=(turnsBack&&session.current<=0)||(turnsForward&&session.current>=displayArticles.length-1)
+    // Validate only in the quarter OPPOSITE the edge actually peeled by the
+    // engine. In LTR portrait: FORWARD peels the right edge -> left quarter;
+    // BACK peels the left edge -> right quarter. Finger trajectory is irrelevant.
+    const crossedFarQuarter=!impossible&&(
+      (turnsForward&&releaseX<=.25)||
+      (turnsBack&&releaseX>=.75)
+    )
 
     // If the installed engine shape ever changes, leave its native release path
     // intact rather than breaking navigation.
@@ -1455,32 +1491,83 @@ function clampPan(container,img,scale,tx,ty){
 function installArticleGestures(container,index){
   const key=displayArticles[index].articleKey
   let st=zoomStates.get(key)||{scale:1,tx:0,ty:0}
-  let start=null,pinch=null,lastTap=0,lastMove=null,raf=null
-  const img=()=>container.querySelector('img')
+  let start=null,pinch=null,lastTap=0,lastMove=null,raf=null,zoomIdleTimer=null
+  const img=()=>container.querySelector('.article-turn-sheet > .article-sheet-image')||container.querySelector('img')
   const persist=()=>zoomStates.set(key,{scale:st.scale,tx:st.tx,ty:st.ty})
-  const apply=()=>{
+  const clearZoomIdle=()=>{clearTimeout(zoomIdleTimer);zoomIdleTimer=null}
+  const visibleFlipImages=()=>{
+    const s=pageFlipSession
+    if(pageTurnMode!=='page'||s?.current!==index||!s?.host)return[]
+    const slot=s.indices?.indexOf(index)
+    if(!Number.isInteger(slot)||slot<0)return[]
+    return [...s.host.querySelectorAll(`.mamina-pageflip-leaf[data-slot="${slot}"] .article-sheet-image`)]
+  }
+  const scheduleZoomIdle=()=>{
+    clearZoomIdle()
+    if(st.scale<=1)return
+    zoomIdleTimer=setTimeout(()=>{
+      if(st.scale<=1)return
+      st={scale:1,tx:0,ty:0}
+      apply({armIdle:false})
+    },30000)
+  }
+  const apply=({armIdle=true}={})=>{
     const im=img();if(!im)return
     const c=clampPan(container,im,st.scale,st.tx,st.ty);st.tx=c.tx;st.ty=c.ty
-    im.style.transform=`translate(${st.tx}px,${st.ty}px) scale(${st.scale})`;persist()
+    const transform=`translate(${st.tx}px,${st.ty}px) scale(${st.scale})`
+    im.style.transform=transform
+    for(const clone of visibleFlipImages())clone.style.setProperty('--mamina-article-transform',transform)
+    persist()
+    const s=pageFlipSession
+    if(pageTurnMode==='page'&&s?.current===index&&s.host){
+      const zoomOwns=st.scale>1
+      s.host.classList.toggle('article-gesture-owns-input',zoomOwns)
+      if(zoomOwns&&s.pointer){
+        s.pointer=null
+        try{
+          if(s.flipUi&&s.dropPointerSymbol)s.flipUi[s.dropPointerSymbol]()
+        }catch(err){debug(err)}
+      }
+    }
+    if(armIdle)scheduleZoomIdle()
+    else if(st.scale<=1)clearZoomIdle()
   }
-  const reset=()=>{st={scale:1,tx:0,ty:0};apply()}
+  const reset=()=>{clearZoomIdle();st={scale:1,tx:0,ty:0};apply({armIdle:false})}
   const setState=next=>{st={scale:Math.max(1,Math.min(4,Number(next?.scale)||1)),tx:Number(next?.tx)||0,ty:Number(next?.ty)||0};apply()}
+  const noteInteraction=()=>{if(st.scale>1)scheduleZoomIdle()}
   container._pz={get scale(){return st.scale},reset,apply,snapshot:()=>({...st}),setState}
 
   container.addEventListener('touchstart',e=>{
-    if(pageTurnMode==='page'&&e.target.closest?.('.mamina-pageflip-host'))return
     if(motionDraw?.v===container)return
+    noteInteraction()
     if(e.target.closest('button'))return
     if(raf)cancelAnimationFrame(raf)
     if(e.touches.length===1){
       const t=e.touches[0];start={x:t.clientX,y:t.clientY,tx:st.tx,ty:st.ty,time:performance.now()}
       lastMove={x:t.clientX,y:t.clientY,time:performance.now(),vx:0,vy:0}
     }else if(e.touches.length===2){
-      const[a,b]=e.touches;pinch={d:Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY),scale:st.scale}
+      const[a,b]=e.touches
+      pinch={d:Math.hypot(a.clientX-b.clientX,a.clientY-b.clientY),scale:st.scale}
+      start=null
+      const s=pageFlipSession
+      if(pageTurnMode==='page'&&s?.current===index){
+        // The first finger may already have initialized MamiNa's release-threshold
+        // state. Once a second finger makes this a pinch, PageFlip no longer owns
+        // that gesture; clear both our pointer state and the fork's pointer capture.
+        s.pointer=null
+        try{s.flip?.cancelTurn?.()}catch(err){debug(err)}
+        try{
+          if(s.flipUi&&s.dropPointerSymbol)s.flipUi[s.dropPointerSymbol]()
+        }catch(err){debug(err)}
+        pageTurnAnimating=false
+        const list=$('articleDeck').querySelector(`[data-index="${index}"] .reaction-list`)
+        list?.classList.remove('pageflip-comments-out')
+      }
     }
   },{passive:true})
   container.addEventListener('touchmove',e=>{
     if(motionDraw?.v===container)return
+    noteInteraction()
     if(e.touches.length===2&&pinch){
       e.preventDefault()
       const[a,b]=e.touches
@@ -1495,6 +1582,7 @@ function installArticleGestures(container,index){
     }
   },{passive:false})
   container.addEventListener('touchend',e=>{
+    noteInteraction()
     if(motionDraw?.v===container){start=null;pinch=null;return}
     if(start&&e.changedTouches?.length){
       const t=e.changedTouches[0],dx=t.clientX-start.x,dy=t.clientY-start.y,dur=performance.now()-start.time
@@ -1669,6 +1757,7 @@ function openMotionComposer(index){
   clearTimeout(motionPlaybackTimer)
   motionPrevZoom=v._pz?.snapshot?.()||{scale:1,tx:0,ty:0}
   motionDraft={articleKey:a.articleKey,index,emoji:[],curve:null,size:.08,scale:'stable',duration:2200}
+  pageFlipSession?.host?.classList.add('article-gesture-owns-input')
   populateMotionEmoji(true);renderMotionSelection();updateMotionPanel()
   $('motionSize').value='8';$('motionSizeLabel').textContent='8';$('motionScaleMode').value='stable';$('motionStatus').textContent=''
   $('motionComposer').hidden=false
@@ -1676,6 +1765,7 @@ function openMotionComposer(index){
   v.classList.add('motion-mode')
 }
 function closeMotionComposer({restoreZoom=true}={}){
+  pageFlipSession?.host?.classList.remove('article-gesture-owns-input')
   if(!motionDraft)return
   const v=motionVisual(motionDraft.index)
   stopMotionDrawing()
@@ -2252,7 +2342,30 @@ async function ensureTutorialReader(){
   await openMagazine(magazines[0].magazineId,null,false)
   return Boolean(currentModel)
 }
+function resetTutorialScroll(screen){
+  if(screen==='home'){
+    try{document.scrollingElement.scrollTop=0}catch{}
+    try{scrollTo({top:0,left:0,behavior:'auto'})}catch{}
+  }else if(screen==='settings'){
+    $('settingsView').scrollTop=0
+  }else if(['reader','comment','motion','motionTap','motionDraw'].includes(screen)){
+    const list=$('articleDeck')?.querySelector(`[data-index="${currentArticleIndex}"] .reaction-list`)
+    if(list)list.scrollTop=0
+  }
+}
+function placeTutorialCoach(target){
+  const card=$('tutorialCoach').querySelector('.tutorial-card')
+  if(!card)return
+  card.classList.remove('tutorial-card-top')
+  if(!target)return
+  const r=target.getBoundingClientRect()
+  const vh=visualViewport?.height||innerHeight
+  // Keep the coach away from the highlighted area. A target in the lower half
+  // moves the coach to the top; upper-half targets keep the coach at the bottom.
+  if((r.top+r.bottom)/2>vh/2)card.classList.add('tutorial-card-top')
+}
 async function tutorialScreen(screen){
+  resetTutorialScroll(screen)
   if(screen==='home'){
     closeTutorialTransient()
     $('settingsView').hidden=true;$('adminGuideView').hidden=true
@@ -2302,17 +2415,19 @@ async function showTutorialStep(index){
   $('tutorialPrev').disabled=tutorialIndex===0
   $('tutorialNext').textContent=tutorialIndex===tutorialSteps.length-1?'Terminer':'Suivant →'
   $('tutorialCoach').hidden=false
-  requestAnimationFrame(()=>{
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
     const target=document.querySelector(step.selector)
-    if(!target)return
+    if(!target){placeTutorialCoach(null);return}
     tutorialHighlighted=target
     target.classList.add('tutorial-highlight')
-    target.scrollIntoView?.({behavior:'smooth',block:'center',inline:'nearest'})
-  })
+    target.scrollIntoView?.({behavior:'auto',block:'nearest',inline:'nearest'})
+    requestAnimationFrame(()=>placeTutorialCoach(target))
+  }))
 }
 function stopTutorial(){
   clearTutorialHighlight()
   closeTutorialTransient()
+  $('tutorialCoach').querySelector('.tutorial-card')?.classList.remove('tutorial-card-top')
   $('tutorialCoach').hidden=true
 }
 $('startUserTutorial').onclick=()=>showTutorialStep(0)
@@ -2321,109 +2436,6 @@ $('tutorialStop').onclick=stopTutorial
 $('tutorialPrev').onclick=()=>showTutorialStep(tutorialIndex-1)
 $('tutorialNext').onclick=()=>tutorialIndex>=tutorialSteps.length-1?stopTutorial():showTutorialStep(tutorialIndex+1)
 
-
-/* Help & improvements article editor */
-let adminHelpRender=null,adminHelpRenderTimer=null
-function wrapCanvasText(ctx,text,maxWidth){
-  const out=[]
-  for(const paragraph of String(text||'').split(/\n/)){
-    if(!paragraph){out.push('');continue}
-    const words=paragraph.split(/\s+/),line=[]
-    for(const word of words){
-      const test=[...line,word].join(' ')
-      if(line.length&&ctx.measureText(test).width>maxWidth){out.push(line.join(' '));line.length=0}
-      line.push(word)
-    }
-    out.push(line.join(' '))
-  }
-  return out
-}
-async function drawHelpArticlePreview(){
-  clearTimeout(adminHelpRenderTimer)
-  const input=$('adminHelpPhoto'),file=input.files?.[0],text=$('adminHelpText').value.trim(),title=$('adminHelpTitle').value.trim(),layout=$('adminHelpLayout').value
-  const canvas=$('adminHelpPreview'),ctx=canvas.getContext('2d')
-  const result={fits:false,blob:null,photoBounds:null,textBounds:null}
-  adminHelpRender=result
-  if(!file){ctx.clearRect(0,0,canvas.width,canvas.height);$('adminHelpCapacity').textContent='Choisis une photo 4:3.';$('adminHelpPublish').disabled=true;return result}
-  let bitmap
-  try{bitmap=await createImageBitmap(file)}catch(e){status('adminHelpStatus','Image illisible.',false);$('adminHelpPublish').disabled=true;return result}
-  const W=1200,H=layout==='landscape'?1200:900
-  canvas.width=W;canvas.height=H
-  ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H)
-  const srcRatio=4/3,actual=bitmap.width/bitmap.height
-  let sx=0,sy=0,sw=bitmap.width,sh=bitmap.height
-  if(actual>srcRatio){sw=bitmap.height*srcRatio;sx=(bitmap.width-sw)/2}else if(actual<srcRatio){sh=bitmap.width/srcRatio;sy=(bitmap.height-sh)/2}
-  const photo=layout==='portrait'?{x:36,y:210,w:640,h:480}:{x:120,y:40,w:960,h:720}
-  ctx.drawImage(bitmap,sx,sy,sw,sh,photo.x,photo.y,photo.w,photo.h);bitmap.close?.()
-  const box=layout==='portrait'?{x:720,y:65,w:430,h:770}:{x:80,y:805,w:1040,h:330}
-  ctx.fillStyle='#111'
-  let y=box.y
-  if(title){
-    ctx.font='700 44px system-ui,-apple-system,sans-serif'
-    const titleLines=wrapCanvasText(ctx,title,box.w)
-    for(const line of titleLines){ctx.fillText(line,box.x,y);y+=54}
-    y+=12
-  }
-  ctx.font='32px system-ui,-apple-system,sans-serif'
-  const lines=wrapCanvasText(ctx,text,box.w),lineH=43,maxY=box.y+box.h
-  const fits=Boolean(text)&&y+lines.length*lineH<=maxY
-  for(const line of lines){if(y+lineH>maxY)break;ctx.fillText(line,box.x,y);y+=lineH}
-  if(!fits){
-    ctx.fillStyle='rgba(190,0,0,.10)';ctx.fillRect(box.x-12,box.y-12,box.w+24,box.h+24)
-    $('adminHelpCapacity').textContent='Texte trop long pour ce gabarit.'
-    $('adminHelpCapacity').classList.add('over')
-  }else{
-    $('adminHelpCapacity').textContent=`Texte OK · ${text.length} caractères`
-    $('adminHelpCapacity').classList.remove('over')
-  }
-  result.fits=fits
-  result.photoBounds={x0:photo.x/W,y0:photo.y/H,x1:(photo.x+photo.w)/W,y1:(photo.y+photo.h)/H}
-  result.textBounds={x0:box.x/W,y0:box.y/H,x1:(box.x+box.w)/W,y1:(box.y+box.h)/H}
-  result.blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/jpeg',.90))
-  adminHelpRender=result
-  $('adminHelpPublish').disabled=!fits||!result.blob
-  return result
-}
-function scheduleHelpPreview(){clearTimeout(adminHelpRenderTimer);adminHelpRenderTimer=setTimeout(()=>drawHelpArticlePreview().catch(debug),120)}
-for(const id of ['adminHelpPhoto','adminHelpTitle','adminHelpText','adminHelpLayout'])$(id).addEventListener(id==='adminHelpPhoto'||id==='adminHelpLayout'?'change':'input',scheduleHelpPreview)
-async function refreshHelpAdminList(){
-  const host=$('adminHelpList');host.innerHTML='<div class="subtle">Chargement…</div>'
-  try{
-    const rows=await service.helpArticleAdminRows();host.innerHTML=''
-    if(!rows.length){host.innerHTML='<div class="empty">Aucun article.</div>';return}
-    for(const row of rows){
-      const e=document.createElement('div');e.className='admin-help-row'
-      const info=document.createElement('div');info.className='admin-help-row-info'
-      info.innerHTML=`<strong>${esc(row.title||'Article')}</strong><span>${row.layout==='landscape'?'Paysage':'Portrait'} · ${row.visibility==='visible'?'Visible':'Masqué'}</span>`
-      const toggle=document.createElement('button');toggle.type='button';toggle.className='secondary';toggle.textContent=row.visibility==='visible'?'Masquer':'Restaurer'
-      toggle.onclick=async()=>{toggle.disabled=true;try{await service.adminSetHelpArticleVisibility(row.articleKey,row.visibility!=='visible');await refreshHelpAdminList();await localHome()}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
-      const del=document.createElement('button');del.type='button';del.className='danger';del.textContent='Supprimer'
-      del.onclick=async()=>{if(!confirm('Supprimer définitivement cet article et toutes ses contributions Telegram ?'))return;del.disabled=true;try{await service.adminDeleteHelpArticle(row.articleKey);await refreshHelpAdminList();await localHome();status('adminHelpStatus','Article supprimé définitivement.',true)}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
-      const actions=document.createElement('div');actions.className='admin-help-row-actions';actions.append(toggle,del)
-      e.append(info,actions);host.appendChild(e)
-    }
-  }catch(e){debug(e);host.innerHTML='<div class="empty">Canal indisponible.</div>'}
-}
-$('adminHelpRefresh').onclick=refreshHelpAdminList
-$('adminHelpPublish').onclick=async()=>{
-  const b=$('adminHelpPublish')
-  try{
-    const render=adminHelpRender?.fits?adminHelpRender:await drawHelpArticlePreview()
-    if(!render?.fits||!render.blob)throw new Error('Le texte doit tenir entièrement dans le gabarit.')
-    b.disabled=true;status('adminHelpStatus','Publication dans Telegram…')
-    const file=new File([render.blob],`mamina-aide-${Date.now()}.jpg`,{type:'image/jpeg'})
-    await service.adminCreateHelpArticle(file,{
-      title:$('adminHelpTitle').value,
-      text:$('adminHelpText').value,
-      layout:$('adminHelpLayout').value,
-      photoBounds:render.photoBounds,textBounds:render.textBounds,
-    })
-    $('adminHelpPhoto').value='';$('adminHelpTitle').value='';$('adminHelpText').value='';adminHelpRender=null
-    await drawHelpArticlePreview();await refreshHelpAdminList();await localHome()
-    status('adminHelpStatus','Article publié.',true)
-  }catch(e){debug(e);status('adminHelpStatus','Erreur : '+(e.message||e),false)}
-  finally{b.disabled=!adminHelpRender?.fits}
-}
 /* Settings */
 $('openSettingsHome').onclick=()=>{
   $('settingsView').hidden=false
@@ -2434,6 +2446,42 @@ $('refreshStorageStats').onclick=refreshStorageStats
 $('clearStoredMaminaPassword').onclick=async()=>{localStorage.removeItem(STORED_PASSWORD_KEY);$('password').value='';await loadSettings();status('storageStatus','Mot de passe MamiNa supprimé de cet appareil.',true)}
 $('themeSelect').onchange=async()=>{applyTheme($('themeSelect').value);await service.setTheme($('themeSelect').value)}
 $('reactionOrder').onchange=async()=>{reactionOrder=$('reactionOrder').value;await service.setReactionOrder(reactionOrder);if(currentModel)await rebuild(currentArticle()?.articleKey)}
+$('pageTurnEnabled').onchange=async()=>{
+  pageTurnEnabled=$('pageTurnEnabled').checked
+  await service.setPageTurnEnabled(pageTurnEnabled)
+  pageTurnMode=pageTurnEnabled&&!matchMedia('(prefers-reduced-motion: reduce)').matches?'page':'slide'
+  if(pageTurnMode==='slide')destroyPageFlip()
+  else{pageFlipModulePromise=null;schedulePageFlipPrepare(0)}
+}
+$('chooseAvatarSettings').onclick=chooseAvatarFromSettings
+$('changeGroupSettings').onclick=async()=>{
+  const modal=$('groupSwitchModal'),select=$('groupSwitchSelect')
+  try{
+    status('groupSwitchStatus','Recherche des discussions…')
+    const rows=await service.forumDialogChoices()
+    select.innerHTML=''
+    for(const row of rows){const o=document.createElement('option');o.value=row.id;o.textContent=row.title;if(row.selected)o.selected=true;select.appendChild(o)}
+    if(!rows.length)throw new Error('Aucune discussion Telegram avec sujets disponible.')
+    status('groupSwitchStatus','')
+    modal.showModal()
+  }catch(e){debug(e);status('settingsActionStatus','Erreur : '+(e.message||e),false)}
+}
+$('groupSwitchCancel').onclick=()=>$('groupSwitchModal').close()
+$('groupSwitchConfirm').onclick=async()=>{
+  const button=$('groupSwitchConfirm'),id=$('groupSwitchSelect').value
+  if(!id)return
+  try{
+    button.disabled=true;status('groupSwitchStatus','Changement de discussion et synchronisation…')
+    const chosen=await service.selectForumDialog(id)
+    clearReaderState();stopArticleSound();freeUrls(readerUrls);zoomStates.clear();clearPreparedSoundUrls()
+    currentModel=null;displayArticles=[];currentArticleIndex=0
+    await service.syncAll();await localHome()
+    status('groupSwitchStatus',`Discussion active : ${chosen.title}`,true)
+    status('settingsActionStatus',`Discussion Telegram : ${chosen.title}`,true)
+    setTimeout(()=>$('groupSwitchModal').close(),350)
+  }catch(e){debug(e);status('groupSwitchStatus','Erreur : '+(e.message||e),false)}
+  finally{button.disabled=false}
+}
 $('forceUpdate').onclick=async()=>{
   try{
     $('forceUpdate').disabled=true
@@ -2463,7 +2511,6 @@ $('copyLogs').onclick=()=>navigator.clipboard.writeText(formatLogs())
 $('verboseLogs').checked=Number(localStorage.getItem('MAMINA_BETA_MTCUTE_LOG_LEVEL')||2)>=4
 $('verboseLogs').onchange=()=>localStorage.setItem('MAMINA_BETA_MTCUTE_LOG_LEVEL',$('verboseLogs').checked?'4':'2')
 
-$('adminPanel').addEventListener('toggle',()=>{if($('adminPanel').open)refreshHelpAdminList().catch(debug)})
 let adminGroups=[],adminTopics=[],lastAdminErrorText=''
 function rememberAdminError(e,context='Administration'){
   const trace=$('adminTrace')?.textContent||''
@@ -2931,11 +2978,13 @@ function openComposer(k,{focus=true}={}){
     forceSaveSelection()
     syncTypingStateFromCaret()
     updateToolbar()
-    requestAnimationFrame(positionComposer)
   }else{
     savedRange=null
     updateToolbar()
   }
+  // Position is required even without focus (notably the tutorial). Without
+  // this, the fixed sheet keeps its static-position fallback below the article.
+  requestAnimationFrame(positionComposer)
 }
 function closeComposer(){
   $('composerModal').hidden=true

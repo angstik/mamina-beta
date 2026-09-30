@@ -12,7 +12,7 @@
   <title>MamiNa β</title>
 </head>
 <body>
-<div id="betaBuildBadge" style="position:fixed;z-index:5000;top:6px;left:50%;transform:translateX(-50%);padding:5px 10px;border-radius:999px;background:#f0a020;color:#201600;font:700 12px system-ui;box-shadow:0 2px 8px #0003;pointer-events:none">MamiNa β · 1.1.30-beta.8</div>
+<div id="betaBuildBadge" style="position:fixed;z-index:5000;top:6px;left:50%;transform:translateX(-50%);padding:5px 10px;border-radius:999px;background:#f0a020;color:#201600;font:700 12px system-ui;box-shadow:0 2px 8px #0003;pointer-events:none">MamiNa β · 1.1.37-beta.1</div>
 
 <div id="splash" class="splash" hidden>
   <img class="splash-brand-image" src="/mamina/mamina-v08-512.png?v=101" alt="MamiNa">
@@ -27,11 +27,6 @@
 <main id="home" class="home">
   <div class="home-logo-wrap">
     <img class="home-logo" src="/mamina/mamina-v08-192.png?v=10" alt="MamiNa">
-    <button id="helpChannelHome" class="help-channel-home" type="button" hidden>
-      <span class="help-channel-icon">💬</span>
-      <span>Aide & idées</span>
-      <span id="helpChannelUnread" class="help-channel-unread">0</span>
-    </button>
   </div>
   <header class="homebar">
     <div class="homebrand">
@@ -129,6 +124,8 @@
         <option value="desc">Récentes → anciennes</option>
       </select>
 
+      <label class="check-row settings-check"><input id="pageTurnEnabled" type="checkbox" checked> Animation rotation de pages</label>
+
       <p class="subtle">MamiNa travaille d’abord depuis le cache local. Les deux dernières revues restent disponibles hors connexion. Un commentaire texte par article peut rester en attente puis partir automatiquement.</p>
     </section>
 
@@ -137,6 +134,20 @@
       <div class="settings-version">Version <strong id="appVersion">0.8.0</strong></div>
       <button id="forceUpdate" type="button">Forcer la mise à jour</button>
       <div id="updateStatus" class="status"></div>
+      <div class="settings-menu-actions">
+        <button id="changeGroupSettings" type="button" class="secondary">Changer de discussion Telegram</button>
+        <button id="chooseAvatarSettings" type="button" class="secondary">Choix de l’avatar</button>
+      </div>
+      <div id="settingsActionStatus" class="status"></div>
+    </section>
+
+    <section class="panel guide-menu-panel">
+      <h2>Guides</h2>
+      <p class="subtle">Assistants pas à pas pour préparer un groupe ou découvrir les fonctions de MamiNa.</p>
+      <div class="guide-menu-actions">
+        <button id="openAdminGroupGuide" type="button">🛠️ Créer un nouveau groupe</button>
+        <button id="startUserTutorial" type="button" class="secondary">👋 Découvrir MamiNa</button>
+      </div>
     </section>
 
     <section class="panel">
@@ -175,15 +186,6 @@
         <div><span>À transmettre</span><strong id="pendingSettings">0</strong></div>
       </div>
       <p class="subtle">Touchez la pastille de connexion dans l’en-tête pour forcer une reconnexion et l’envoi des messages en attente.</p>
-    </section>
-
-    <section class="panel guide-menu-panel">
-      <h2>Guides</h2>
-      <p class="subtle">Assistants pas à pas pour préparer un groupe ou découvrir les fonctions de MamiNa.</p>
-      <div class="guide-menu-actions">
-        <button id="openAdminGroupGuide" type="button">🛠️ Créer un nouveau groupe</button>
-        <button id="startUserTutorial" type="button" class="secondary">👋 Découvrir MamiNa</button>
-      </div>
     </section>
 
     <details id="adminPanel" class="panel admin-panel">
@@ -271,31 +273,6 @@
         <select id="adminTopicSelect"></select>
         <button id="adminRefreshTopics" type="button">Actualiser</button>
       </div>
-
-      <section class="admin-help-channel">
-        <h3>Canal Aide & améliorations</h3>
-        <p class="subtle">Les articles utilisent exactement le lecteur d’une revue. L’image finale est fabriquée ici puis publiée dans le sujet Telegram dédié.</p>
-        <label for="adminHelpLayout">Disposition</label>
-        <select id="adminHelpLayout">
-          <option value="portrait">Portrait · texte à droite</option>
-          <option value="landscape">Paysage · texte en bas</option>
-        </select>
-        <label for="adminHelpPhoto">Photo 4:3</label>
-        <input id="adminHelpPhoto" type="file" accept="image/*">
-        <label for="adminHelpTitle">Titre (facultatif)</label>
-        <input id="adminHelpTitle" maxlength="160" placeholder="Titre de l’article">
-        <label for="adminHelpText">Texte</label>
-        <textarea id="adminHelpText" rows="7" maxlength="3500" placeholder="Texte de l’article"></textarea>
-        <div class="admin-help-capacity"><span id="adminHelpCapacity">Choisis une photo.</span></div>
-        <canvas id="adminHelpPreview" class="admin-help-preview" width="1200" height="900"></canvas>
-        <button id="adminHelpPublish" type="button" disabled>Publier l’article</button>
-        <div id="adminHelpStatus" class="status"></div>
-        <div class="admin-help-list-head">
-          <strong>Articles publiés</strong>
-          <button id="adminHelpRefresh" type="button" class="secondary">Actualiser</button>
-        </div>
-        <div id="adminHelpList" class="admin-help-list"></div>
-      </section>
 
       <label for="adminPdf">Nouveau PDF Famileo</label>
       <input id="adminPdf" type="file" accept="application/pdf">
@@ -509,6 +486,19 @@
   </div>
 </div>
 
+<dialog id="groupSwitchModal" class="auth-dialog">
+  <form method="dialog" onsubmit="return false">
+    <h2>Discussion Telegram</h2>
+    <p class="subtle">Choisis le groupe familial à utiliser. La session Telegram reste connectée.</p>
+    <select id="groupSwitchSelect"></select>
+    <div id="groupSwitchStatus" class="status"></div>
+    <div class="dialog-actions">
+      <button type="button" id="groupSwitchCancel" class="secondary">Annuler</button>
+      <button type="button" id="groupSwitchConfirm">Utiliser ce groupe</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="telegramAuthModal" class="auth-dialog">
   <form method="dialog" id="telegramAuthForm">
     <h2 id="telegramAuthTitle">Telegram</h2>
@@ -521,6 +511,6 @@
   </form>
 </dialog>
 
-<script>window.MAMINA_BETA_PAGE_TURN=true</script>\n<script type="module" src="/src/user/app.js"></script>
+<script type="module" src="/src/user/app.js"></script>
 </body>
 </html>

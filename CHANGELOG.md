@@ -12,7 +12,7 @@
 ### Vérifications
 
 - Tests de régression ajoutés pour le tri par date (égalité et date absente) et la conservation de photos 4:3, 3:4, carrées et proches de 4:3 dans les deux dispositions.
-- Contrôles syntaxiques et versions vérifiés en mémoire. GitHub Actions exécutera `npm run check` et `npm run build` après le push.
+- Contrôles syntaxiques et versions vérifiés en mémoire. GitHub Actions : `npm run check`, tests de régression et `npm run build` réussis sur le commit `d66dcfb`. Déploiement GitHub Pages réussi.
 - Validation visuelle sur appareil encore nécessaire.
 
 ## 1.1.37-beta.6 — 2026-10-01

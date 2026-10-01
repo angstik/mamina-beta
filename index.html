@@ -287,7 +287,7 @@
           <option value="portrait">Portrait · texte à droite</option>
           <option value="landscape">Paysage · texte en bas</option>
         </select>
-        <label for="adminHelpPhoto">Photo 4:3</label>
+        <label for="adminHelpPhoto">Photo (orientation selon la disposition)</label>
         <input id="adminHelpPhoto" type="file" accept="image/*">
         <label for="adminHelpTitle">Titre (facultatif)</label>
         <input id="adminHelpTitle" maxlength="160" placeholder="Titre de l’article">
@@ -499,6 +499,7 @@
 
 <div id="composerModal" class="composer-overlay" hidden>
   <div id="composerSheet" class="composer-sheet">
+    <div id="helpComposerCapacity" class="help-composer-capacity" role="status" aria-live="polite" hidden></div>
     <div id="composerText" class="rich-editor" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Écrire un message…"></div>
 
     <div id="formatRow" class="format-row">

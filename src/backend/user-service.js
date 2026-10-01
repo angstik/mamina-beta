@@ -22,7 +22,7 @@ function rowMetaText(message) { return message?.text || message?.caption || '' }
 const PARAMS_TOPIC='params', CATALOG_TOPIC='catalog', HELP_TOPIC='Aide & améliorations MamiNa'
 const HELP_MAGAZINE_PREFIX='mamina-help'
 function helpMagazineId(peer){return `${HELP_MAGAZINE_PREFIX}:${idOfPeer(peer)}`}
-function exactTopic(topic,name){return String(topic?.title||'').trim().toLowerCase()===name}
+function exactTopic(topic,name){return String(topic?.title||'').trim().toLowerCase()===String(name||'').trim().toLowerCase()}
 function slotCode(slot){return slot==='top'?'h':slot==='bottom'?'b':'p'}
 function clamp01(n){return Math.max(0,Math.min(1,Number(n)||0))}
 function cleanBounds(b){
@@ -231,8 +231,8 @@ export class UserMaminaService {
     const magazine=await getMagazine(item.magazineId)
     if(!magazine) throw new Error('Revue de l’animation en attente introuvable.')
 
-    const {article,rootId}=await this._articleRootContext(magazine,item.articleKey,item.topicId)
-    const sentMessage=await this.gateway.postEmojiMotion(this.dialog.peer,Number(item.topicId),rootId,item.articleKey,item.motion)
+    const {article,rootId,topicId}=await this._articleRootContext(magazine,item.articleKey,item.topicId)
+    const sentMessage=await this.gateway.postEmojiMotion(this.dialog.peer,topicId,rootId,item.articleKey,item.motion)
     return {sentMessage,magazine,article}
   }
 
@@ -619,10 +619,24 @@ export class UserMaminaService {
     return record
   }
 
+  async helpTopicMessages(topic) {
+    // Earlier betas created duplicate topics because their names were compared
+    // with inconsistent casing. Read every matching topic without deleting any.
+    const topics=(await this.gateway.topics(this.dialog.peer)).filter(t=>exactTopic(t,HELP_TOPIC))
+    if(topic&&!topics.some(t=>topicIdOf(t)===topicIdOf(topic)))topics.push(topic)
+    const messages=new Map()
+    for(const entry of topics.sort((a,b)=>topicIdOf(a)-topicIdOf(b))){
+      for(const message of await this.gateway.topicMessages(this.dialog.peer,topicIdOf(entry),{limit:Infinity})){
+        messages.set(Number(message.id),message)
+      }
+    }
+    return [...messages.values()].sort((a,b)=>Number(a.id)-Number(b.id))
+  }
+
   async syncHelpTopic(topic) {
     if(!this.dialog)throw new Error('Aucun groupe sélectionné.')
     const peer=this.dialog.peer,tid=topicIdOf(topic),key=topicKey(peer,tid),magazineId=helpMagazineId(peer)
-    const raw=await this.gateway.topicMessages(peer,tid,{limit:Infinity})
+    const raw=await this.helpTopicMessages(topic)
     const models=raw.map(TelegramGateway.messageModel)
     const state=new Map()
     for(const row of models.filter(r=>r.meta?.kind==='help-state'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id)){
@@ -685,7 +699,7 @@ export class UserMaminaService {
     const topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
     if(!topic)return[]
     await this.syncHelpTopic(topic)
-    const raw=await this.gateway.topicMessages(this.dialog.peer,topicIdOf(topic),{limit:Infinity})
+    const raw=await this.helpTopicMessages(topic)
     const models=raw.map(TelegramGateway.messageModel)
     const state=new Map()
     for(const row of models.filter(r=>r.meta?.kind==='help-state'&&r.meta?.articleKey).sort((a,b)=>a.id-b.id))state.set(String(row.meta.articleKey),String(row.meta.visibility||'visible'))
@@ -745,7 +759,7 @@ export class UserMaminaService {
     if(!this.gateway||!this.dialog)throw new Error('Telegram non initialisé.')
     const topics=await this.gateway.topics(this.dialog.peer),topic=topics.find(t=>exactTopic(t,HELP_TOPIC))
     if(!topic)throw new Error('Sujet Aide & améliorations introuvable.')
-    const tid=topicIdOf(topic),raw=await this.gateway.topicMessages(this.dialog.peer,tid,{limit:Infinity}),models=raw.map(TelegramGateway.messageModel)
+    const raw=await this.helpTopicMessages(topic),models=raw.map(TelegramGateway.messageModel)
     const root=models.find(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article'&&String(r.meta?.articleKey||'')===String(articleKey))
     if(!root)throw new Error('Article introuvable.')
     const byId=new Map(models.map(r=>[Number(r.id),r]))
@@ -1109,8 +1123,8 @@ export class UserMaminaService {
     }
 
     try {
-      const {rootId}=await this._articleRootContext(this.current.magazine,articleKey,this.current.magazine.topicId)
-      const sent=await this.gateway.postEmojiMotion(this.dialog.peer,Number(this.current.magazine.topicId),rootId,articleKey,normalized)
+      const {rootId,topicId}=await this._articleRootContext(this.current.magazine,articleKey,this.current.magazine.topicId)
+      const sent=await this.gateway.postEmojiMotion(this.dialog.peer,topicId,rootId,articleKey,normalized)
       await this._persistSentMotionResult({articleKey,magazineId:this.current.magazine.magazineId,motion:normalized}, {sentMessage:sent,magazine:this.current.magazine,article})
       return this.currentView()
     } catch(e) {
@@ -1132,8 +1146,8 @@ export class UserMaminaService {
     const magazine=await getMagazine(op.magazineId);if(!magazine)throw new Error('Revue introuvable pour le son.')
     const articles=await listArticles(op.magazineId),article=articles.find(a=>a.articleKey===op.articleKey)||this.current?.articles?.find(a=>a.articleKey===op.articleKey)
     if(!article)throw new Error('Article introuvable pour le son.')
-    const {rootId}=await this._articleRootContext(magazine,op.articleKey,op.topicId)
-    const sent=await this.gateway.postArticleSound(this.dialog.peer,Number(op.topicId),rootId,op.articleKey,op.sound)
+    const {rootId,topicId}=await this._articleRootContext(magazine,op.articleKey,op.topicId)
+    const sent=await this.gateway.postArticleSound(this.dialog.peer,topicId,rootId,op.articleKey,op.sound)
     const row=TelegramGateway.messageModel(sent)
     const payload={...row,articleKey:op.articleKey,key:`${magazine.magazineId}:${row.id}`,magazineId:magazine.magazineId,topicKey:magazine.topicKey}
     await putMessages([payload])
@@ -1175,8 +1189,8 @@ export class UserMaminaService {
     const magazine=await getMagazine(op.magazineId);if(!magazine)throw new Error('Revue introuvable pour la suppression.')
     const articles=await listArticles(op.magazineId),article=articles.find(a=>a.articleKey===op.articleKey)||this.current?.articles?.find(a=>a.articleKey===op.articleKey)
     if(!article)throw new Error('Article introuvable pour la suppression.')
-    const {rootId}=await this._articleRootContext(magazine,op.articleKey,op.topicId)
-    const marker=await this.gateway.postDeletionMarker(this.dialog.peer,Number(op.topicId),rootId,op.articleKey,Number(op.targetMessageId),op.targetKind)
+    const {rootId,topicId}=await this._articleRootContext(magazine,op.articleKey,op.topicId)
+    const marker=await this.gateway.postDeletionMarker(this.dialog.peer,topicId,rootId,op.articleKey,Number(op.targetMessageId),op.targetKind)
     // Once the tombstone exists, direct Telegram deletion is best-effort only.
     try{await this.gateway.deleteMessagesById(this.dialog.peer,[Number(op.targetMessageId)])}catch(e){warn('delete','Suppression Telegram directe impossible, tombstone publié',{messageId:op.targetMessageId,message:e?.message||String(e)})}
     const markerRow=TelegramGateway.messageModel(marker)
@@ -1280,12 +1294,12 @@ export class UserMaminaService {
     const articles=await listArticles(magazine.magazineId)
     const article=articles.find(a=>a.articleKey===articleKey)||this.current?.articles?.find(a=>a.articleKey===articleKey)
     if(!article)throw new Error('Article introuvable.')
-    const full=await this.gateway.topicMessages(this.dialog.peer,Number(topicId),{limit:Infinity})
+    const full=magazine.source==='help'?await this.helpTopicMessages():await this.gateway.topicMessages(this.dialog.peer,Number(topicId),{limit:Infinity})
     if(magazine.source==='help'){
       const models=full.map(TelegramGateway.messageModel)
       const root=models.find(r=>r.meta?.kind==='root'&&r.meta?.type==='help-article'&&String(r.meta?.articleKey||'')===String(articleKey))
       if(!root)throw new Error('Racine de l’article d’aide introuvable.')
-      return {article,rootId:Number(root.id),full}
+      return {article,rootId:Number(root.id),topicId:root.topicId||Number(topicId),full}
     }
     let bytes=await getAsset(`pdf:${magazine.magazineId}`)
     if(!bytes)bytes=await getAsset(`staging-pdf:${magazine.magazineId}`)
@@ -1294,7 +1308,7 @@ export class UserMaminaService {
     try{
       const pdfArticle=pdf.articles().find(a=>a.articleKey===articleKey)||article
       const {rootId}=await this.gateway.ensureRoot(this.dialog.peer,Number(topicId),pdf.magazine,pdfArticle,full)
-      return {article:pdfArticle,rootId,full}
+      return {article:pdfArticle,rootId,topicId:Number(topicId),full}
     }finally{try{await pdf.doc?.cleanup?.();await pdf.doc?.destroy?.()}catch{}}
   }
 
@@ -1302,9 +1316,9 @@ export class UserMaminaService {
     if(!this.gateway || !this.dialog) throw new Error('Telegram non initialisé.')
     const magazine=await getMagazine(item.magazineId)
     if(!magazine) throw new Error('Revue de la file d’attente introuvable.')
-    const {article,rootId}=await this._articleRootContext(magazine,item.articleKey,item.topicId)
+    const {article,rootId,topicId}=await this._articleRootContext(magazine,item.articleKey,item.topicId)
     const sentMessage=await this.gateway.postTextComment(
-      this.dialog.peer,Number(item.topicId),rootId,item.articleKey,item.text,item.format||'mamina-markdown-v1'
+      this.dialog.peer,topicId,rootId,item.articleKey,item.text,item.format||'mamina-markdown-v1'
     )
     return {sentMessage,magazine,article}
   }

@@ -3,7 +3,7 @@ import './page-turn.css'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.37-beta.5'
+const APP_VERSION='1.1.37-beta.6'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -2467,7 +2467,9 @@ function openHelpTextComposer(){
   composerArticleKey=null
   $('composerText').innerHTML=renderMarkup(adminHelpDraftMarkup)
   $('composerText').dataset.placeholder='Texte de l’article…'
+  $('helpComposerCapacity').hidden=false
   $('composerModal').hidden=false
+  updateHelpComposerCapacity()
   $('formatRow').hidden=false
   $('colorRow').hidden=true
   currentColor=defaultEditorColor()
@@ -2578,35 +2580,54 @@ function wrapCanvasText(ctx,text,maxWidth){
   }
   return out
 }
+function helpTextMetrics(ctx,markup,title,layout){
+  const box=layout==='portrait'?{x:720,y:65,w:430,h:770}:{x:80,y:805,w:1040,h:330}
+  ctx.font='700 44px system-ui,-apple-system,sans-serif'
+  const titleLines=title?wrapCanvasText(ctx,title,box.w):[]
+  const bodyY=box.y+titleLines.length*54+(title?12:0)
+  const maxLines=Math.max(0,Math.floor((box.y+box.h-bodyY)/43))
+  const richLines=helpPlainText(markup)?richCanvasLines(ctx,markup,box.w,32):[]
+  return {box,titleLines,bodyY,maxLines,richLines}
+}
+const helpMeasureCanvas=document.createElement('canvas')
+function updateHelpComposerCapacity(){
+  if(composerPurpose!=='help'||$('composerModal').hidden)return
+  const {richLines,maxLines}=helpTextMetrics(helpMeasureCanvas.getContext('2d'),editorMarkup(),$('adminHelpTitle').value.trim(),$('adminHelpLayout').value)
+  const counter=$('helpComposerCapacity')
+  counter.textContent=`${richLines.length}/${maxLines} lignes${richLines.length>maxLines?' · Texte trop long':''}`
+  counter.classList.toggle('over',richLines.length>maxLines)
+  positionComposer()
+}
+// Observe text and formatting commands alike, leaving the shared editor intact.
+new MutationObserver(updateHelpComposerCapacity).observe($('composerText'),{subtree:true,childList:true,characterData:true,attributes:true})
+
 async function drawHelpArticlePreview(){
   clearTimeout(adminHelpRenderTimer)
   const input=$('adminHelpPhoto'),file=input.files?.[0],markup=adminHelpDraftMarkup||$('adminHelpText').value||'',plain=helpPlainText(markup),title=$('adminHelpTitle').value.trim(),layout=$('adminHelpLayout').value
   const canvas=$('adminHelpPreview'),ctx=canvas.getContext('2d')
   const result={fits:false,blob:null,photoBounds:null,textBounds:null}
   adminHelpRender=result
-  if(!file){ctx.clearRect(0,0,canvas.width,canvas.height);$('adminHelpCapacity').textContent='Choisis une photo 4:3.';$('adminHelpCapacity').classList.remove('over');$('adminHelpPublish').disabled=true;return result}
+  if(!file){ctx.clearRect(0,0,canvas.width,canvas.height);$('adminHelpCapacity').textContent='Choisis une photo.';$('adminHelpCapacity').classList.remove('over');$('adminHelpPublish').disabled=true;return result}
   let bitmap
   try{bitmap=await createImageBitmap(file)}catch(e){status('adminHelpStatus','Image illisible.',false);$('adminHelpPublish').disabled=true;return result}
   const W=1200,H=layout==='landscape'?1200:900
   canvas.width=W;canvas.height=H
   ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H)
-  const srcRatio=4/3,actual=bitmap.width/bitmap.height
+  const srcRatio=layout==='portrait'?3/4:4/3,actual=bitmap.width/bitmap.height
   let sx=0,sy=0,sw=bitmap.width,sh=bitmap.height
   if(actual>srcRatio){sw=bitmap.height*srcRatio;sx=(bitmap.width-sw)/2}else if(actual<srcRatio){sh=bitmap.width/srcRatio;sy=(bitmap.height-sh)/2}
-  const photo=layout==='portrait'?{x:36,y:210,w:640,h:480}:{x:120,y:40,w:960,h:720}
+  const photo=layout==='portrait'?{x:36,y:50,w:600,h:800}:{x:120,y:40,w:960,h:720}
   ctx.drawImage(bitmap,sx,sy,sw,sh,photo.x,photo.y,photo.w,photo.h);bitmap.close?.()
-  const box=layout==='portrait'?{x:720,y:65,w:430,h:770}:{x:80,y:805,w:1040,h:330}
+  const {box,titleLines,bodyY,maxLines,richLines}=helpTextMetrics(ctx,markup,title,layout)
   ctx.fillStyle='#111'
   let y=box.y
   if(title){
     ctx.font='700 44px system-ui,-apple-system,sans-serif'
-    const titleLines=wrapCanvasText(ctx,title,box.w)
     for(const line of titleLines){ctx.fillText(line,box.x,y);y+=54}
     y+=12
   }
-  const bodySize=32,lineH=43,maxY=box.y+box.h
-  const richLines=plain?richCanvasLines(ctx,markup,box.w,bodySize):[]
-  const maxLines=Math.max(0,Math.floor((maxY-y)/lineH))
+  const bodySize=32,lineH=43
+  y=bodyY
   const usedLines=richLines.length
   const fits=Boolean(plain)&&usedLines<=maxLines
   for(const line of richLines.slice(0,maxLines)){drawRichCanvasLine(ctx,line,box.x,y,bodySize);y+=lineH}
@@ -2659,7 +2680,7 @@ $('adminHelpRefresh').onclick=refreshHelpAdminList
 $('adminHelpPublish').onclick=async()=>{
   const b=$('adminHelpPublish')
   try{
-    const render=adminHelpRender?.fits?adminHelpRender:await drawHelpArticlePreview()
+    const render=await drawHelpArticlePreview()
     if(!render?.fits||!render.blob)throw new Error('Le texte doit tenir entièrement dans le gabarit.')
     b.disabled=true;status('adminHelpStatus','Publication dans Telegram…')
     const file=new File([render.blob],`mamina-aide-${Date.now()}.jpg`,{type:'image/jpeg'})
@@ -3232,6 +3253,7 @@ function openComposer(k,{focus=true}={}){
 }
 function closeComposer(){
   $('composerModal').hidden=true
+  $('helpComposerCapacity').hidden=true
   $('reader').classList.remove('composer-open')
   $('reader').style.height=''
   if(currentModel?.magazine)$('readerDate').textContent=fmtShort(currentModel.magazine.date)

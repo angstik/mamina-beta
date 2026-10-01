@@ -1,9 +1,10 @@
 import './styles.css'
 import './page-turn.css'
+import { fitHelpPhoto } from '../backend/help-articles.js'
 import { UserMaminaService } from '../backend/user-service.js'
 import { clearLogs as clearTechLogs, formatLogs, onLog, info, error as logError } from '../backend/log.js'
 
-const APP_VERSION='1.1.37-beta.6'
+const APP_VERSION='1.1.37-beta.7'
 const READER_STATE_KEY='MAMINA_BETA_READER_STATE'
 const HEARTBEAT_KEY='MAMINA_BETA_HEARTBEAT'
 const STORED_PASSWORD_KEY='MAMINA_BETA_STORED_PASSWORD'
@@ -2613,11 +2614,9 @@ async function drawHelpArticlePreview(){
   const W=1200,H=layout==='landscape'?1200:900
   canvas.width=W;canvas.height=H
   ctx.fillStyle='#fff';ctx.fillRect(0,0,W,H)
-  const srcRatio=layout==='portrait'?3/4:4/3,actual=bitmap.width/bitmap.height
-  let sx=0,sy=0,sw=bitmap.width,sh=bitmap.height
-  if(actual>srcRatio){sw=bitmap.height*srcRatio;sx=(bitmap.width-sw)/2}else if(actual<srcRatio){sh=bitmap.width/srcRatio;sy=(bitmap.height-sh)/2}
-  const photo=layout==='portrait'?{x:36,y:50,w:600,h:800}:{x:120,y:40,w:960,h:720}
-  ctx.drawImage(bitmap,sx,sy,sw,sh,photo.x,photo.y,photo.w,photo.h);bitmap.close?.()
+  const frame=layout==='portrait'?{x:36,y:50,w:600,h:800}:{x:120,y:40,w:960,h:720}
+  const photo=fitHelpPhoto(frame,bitmap.width,bitmap.height)
+  ctx.drawImage(bitmap,photo.x,photo.y,photo.w,photo.h);bitmap.close?.()
   const {box,titleLines,bodyY,maxLines,richLines}=helpTextMetrics(ctx,markup,title,layout)
   ctx.fillStyle='#111'
   let y=box.y
@@ -2662,7 +2661,9 @@ function renderHelpAdminRows(rows=[]){
   for(const row of rows){
     const e=document.createElement('div');e.className='admin-help-row'
     const info=document.createElement('div');info.className='admin-help-row-info'
-    info.innerHTML=`<strong>${esc(row.title||'Article')}</strong><span>${row.layout==='landscape'?'Paysage':'Portrait'} · ${row.visibility==='visible'?'Visible':'Masqué'}</span>`
+    const publishedAt=new Date(row.date||'')
+    const dateLabel=Number.isFinite(publishedAt.getTime())?new Intl.DateTimeFormat('fr-FR',{day:'numeric',month:'long',year:'numeric'}).format(publishedAt):'Date inconnue'
+    info.innerHTML=`<strong>${esc(row.title||'Article')}</strong><span>${esc(dateLabel)} · ${row.layout==='landscape'?'Paysage':'Portrait'} · ${row.visibility==='visible'?'Visible':'Masqué'}</span>`
     const toggle=document.createElement('button');toggle.type='button';toggle.className='secondary';toggle.textContent=row.visibility==='visible'?'Masquer':'Restaurer'
     toggle.onclick=async()=>{toggle.disabled=true;try{renderHelpAdminRows(await service.adminSetHelpArticleVisibility(row.articleKey,row.visibility!=='visible'));await localHome()}catch(err){debug(err);status('adminHelpStatus','Erreur : '+(err.message||err),false)}}
     const del=document.createElement('button');del.type='button';del.className='danger';del.textContent='Supprimer'

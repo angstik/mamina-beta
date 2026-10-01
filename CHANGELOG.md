@@ -1,5 +1,20 @@
 # Changelog — MamiNa bêta
 
+## 1.1.37-beta.7 — 2026-10-01
+
+- Date de publication affichée dans chaque vignette de la liste d’édition des articles Aide.
+- Liste d’édition triée par date décroissante ; identifiant du message Telegram décroissant en cas d’égalité. Les dates inconnues passent en dernier.
+- Photos affichées intégralement dans les deux dispositions, avec proportions conservées et centrage dans la zone disponible. Suppression du recadrage automatique : une photo 4:3 conserve notamment toute sa hauteur.
+- Les limites photo publiées correspondent à l’image effectivement dessinée, pour la vue photo du lecteur.
+- Les images déjà publiées ne peuvent pas retrouver les pixels supprimés : republier l’article avec sa photo source pour corriger un ancien recadrage.
+- Versions application, packages et cache PWA alignées.
+
+### Vérifications
+
+- Tests de régression ajoutés pour le tri par date (égalité et date absente) et la conservation de photos 4:3, 3:4, carrées et proches de 4:3 dans les deux dispositions.
+- Contrôles syntaxiques et versions vérifiés en mémoire. GitHub Actions exécutera `npm run check` et `npm run build` après le push.
+- Validation visuelle sur appareil encore nécessaire.
+
 ## 1.1.37-beta.6 — 2026-10-01
 
 ### Canal Aide : corrections

@@ -1,5 +1,6 @@
 import { loadEncryptedSecret, decryptCredentials } from './crypto.js'
 import { TelegramGateway } from './telegram.js'
+import { compareHelpArticlesNewest } from './help-articles.js'
 import { FamileoPdf } from './pdf.js'
 import { FamileoGeometryParser } from './famileo-parser.js'
 import { EmojiResolver } from './emoji-catalog.js'
@@ -707,10 +708,10 @@ export class UserMaminaService {
       articleKey:String(r.meta.articleKey),title:String(r.meta.title||'Article'),layout:String(r.meta.layout||'portrait'),
       visibility:state.get(String(r.meta.articleKey))||String(r.meta.visibility||'visible'),date:r.date||'',rootMessageId:Number(r.id)
     }))
-    if(remote.length)return remote
+    if(remote.length)return remote.sort(compareHelpArticlesNewest)
     const magazineId=helpMagazineId(this.dialog.peer)
     const local=await listArticles(magazineId)
-    return local.map(a=>({articleKey:a.articleKey,title:a.helpTitle||'Article',layout:a.helpLayout||'portrait',visibility:'visible',date:a.dateIso||'',rootMessageId:Number(a.helpRootMessageId||0)}))
+    return local.map(a=>({articleKey:a.articleKey,title:a.helpTitle||'Article',layout:a.helpLayout||'portrait',visibility:'visible',date:a.dateIso||'',rootMessageId:Number(a.helpRootMessageId||0)})).sort(compareHelpArticlesNewest)
   }
 
   async adminCreateHelpArticle(file,{title='',text='',layout='portrait',photoBounds=null,textBounds=null}={}) {

@@ -18,7 +18,8 @@
 - Analyse syntaxique JavaScript, références DOM, unicité des identifiants HTML et cohérence des versions contrôlées en mémoire.
 - Scénario de régression exécuté en mémoire : deux sujets Aide homonymes donnent deux articles utilisateur, deux entrées admin et la bonne destination pour les contributions.
 - Ajout de `tools/check-help.mjs` à `npm run check` : couverture des sujets homonymes, textes, liste admin, masquage/restauration et destination des contributions.
-- `npm run check` et `npm run build` seront exécutés par GitHub Actions après le push ; pas de terminal ni de navigateur disponibles dans cette session.
+- GitHub Actions : `npm run check` (dont le test de régression Canal Aide) et `npm run build` réussis sur le commit `75bab5c`. Déploiement GitHub Pages réussi.
+- Pas de navigateur disponible dans cette session : validation visuelle et saisie réelle sur appareil encore nécessaires.
 - À valider sur appareil : compteur pendant saisie/mise en forme, cadrage des photos et présentation du bouton.
 
 ## Historique antérieur
